@@ -1,0 +1,21 @@
+积词 App 更新维护步骤：
+
+修改代码：在 VS Code 的 src 文件夹下修改功能或样式。
+
+本地打包：在终端输入 npm run build（确保生成了新的 dist 文件夹）。
+
+同步部署包：
+
+删除旧的 docs 文件夹。
+
+将 dist 文件夹重命名为 docs（或者把 dist 里的内容全部考进 docs）。
+
+推送至 GitHub：
+
+git add .
+
+git commit -m "更新说明"
+
+git push origin main
+
+生效验证：等待 GitHub Actions 变绿，刷新网页即可。

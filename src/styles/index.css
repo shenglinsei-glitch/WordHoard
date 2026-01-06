@@ -6,8 +6,16 @@
 
 
 @layer utilities {
-.perspective-1000 { perspective: 1000px; }
-.transform-style-3d { transform-style: preserve-3d; }
-.backface-hidden { backface-visibility: hidden; }
-.rotate-y-180 { transform: rotateY(180deg); }
+  .perspective-1000 { perspective: 1000px; }
+  .transform-style-3d { transform-style: preserve-3d; }
+  .backface-hidden { backface-visibility: hidden; }
+  .rotate-y-180 { transform: rotateY(180deg); }
+
+  /* ⬇️ 新增：学习卡片正面文字自适应 */
+  .flashcard-front-text {
+    font-size: clamp(2.5rem, 8vw, 5.5rem);
+    font-weight: 400;
+    word-break: break-word;
+    text-wrap: balance;
+  }
 }

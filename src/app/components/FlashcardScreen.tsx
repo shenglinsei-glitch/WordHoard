@@ -74,6 +74,7 @@ export function FlashcardScreen({ words, folders, onUpdateWord }: FlashcardScree
   };
 
   const studyWords = getFilteredWords();
+  const hasStudyWords = studyWords.length > 0;
 
   useEffect(() => {
     setIsFlipped(false);
@@ -83,6 +84,19 @@ export function FlashcardScreen({ words, folders, onUpdateWord }: FlashcardScree
     setCurrentIndex(0);
     setIsFlipped(false);
   }, [selectedFolders, frontDisplayType]);
+
+  useEffect(() => {
+    // When the filtered list changes (e.g. last word completed), keep index valid
+    if (!hasStudyWords) {
+      setCurrentIndex(0);
+      setIsFlipped(false);
+      return;
+    }
+    if (currentIndex >= studyWords.length) {
+      setCurrentIndex(0);
+      setIsFlipped(false);
+    }
+  }, [hasStudyWords, studyWords.length, currentIndex]);
 
   // Get front content based on settings with fallback
   const getFrontContent = (word: Word): { type: string; content: any } => {
@@ -110,7 +124,8 @@ export function FlashcardScreen({ words, folders, onUpdateWord }: FlashcardScree
   };
 
   const handleNext = (difficulty: 'hard' | 'good' | 'easy') => {
-    const word = studyWords[currentIndex];
+    if (!hasStudyWords || !currentWord) return;
+    const word = currentWord;
     const currentState = word.studyState;
 
     let newDifficulty: 'hard' | 'good' | 'easy' | 'completed' = difficulty;
@@ -171,136 +186,9 @@ export function FlashcardScreen({ words, folders, onUpdateWord }: FlashcardScree
     }
   };
 
-  if (studyWords.length === 0) {
-    return (
-      <>
-        <div className="min-h-screen bg-[#F5F7FA] flex items-center justify-center pb-20">
-          <div className="text-center p-8">
-            <p className="text-gray-900 text-2xl mb-4">学習する単語がありません</p>
-            <p className="text-base text-gray-600">
-              {selectedFolders.length === 0
-                ? 'フォルダを選択するか、単語を追加してから学習を始めましょう'
-                : '今日復習する単語はありません。おめでとうございます！'}
-            </p>
-            <button
-              onClick={() => setShowSettings(true)}
-              className="mt-6 px-8 py-3 bg-white/80 backdrop-blur-xl text-[#1B7FA3] rounded-full hover:bg-white transition-colors border-none shadow-md ring-1 ring-black/5"
-            >
-              設定を開く
-            </button>
-          </div>
-        </div>
-
-        {showSettings && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-              <div className="flex items-center justify-between p-6 border-b border-gray-200 sticky top-0 bg-white rounded-t-2xl">
-                <h2 className="text-xl">学習設定</h2>
-                <button
-                  onClick={() => setShowSettings(false)}
-                  className="p-2 hover:bg-gray-100 rounded-full transition-colors"
-                >
-                  <X size={24} className="text-gray-600" />
-                </button>
-              </div>
-
-              <div className="p-6 space-y-6">
-                <div>
-                  <h3 className="text-base mb-3 text-gray-700">学習範囲を選択</h3>
-                  <div className="space-y-2 max-h-64 overflow-y-auto">
-                    {folders.map((folder) => (
-                      <label
-                        key={folder.id}
-                        className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-lg cursor-pointer transition-colors"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={selectedFolders.includes(folder.id)}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setSelectedFolders([...selectedFolders, folder.id]);
-                            } else {
-                              setSelectedFolders(selectedFolders.filter((id) => id !== folder.id));
-                            }
-                          }}
-                          className="w-5 h-5 text-[#53BEE8] rounded focus:ring-2 focus:ring-[#53BEE8] border-gray-300"
-                        />
-                        <span className="text-gray-700">{folder.name}</span>
-                      </label>
-                    ))}
-                    <label className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-lg cursor-pointer transition-colors">
-                      <input
-                        type="checkbox"
-                        checked={selectedFolders.includes('no-folder')}
-                        onChange={(e) => {
-                          if (e.target.checked) {
-                            setSelectedFolders([...selectedFolders, 'no-folder']);
-                          } else {
-                            setSelectedFolders(selectedFolders.filter((id) => id !== 'no-folder'));
-                          }
-                        }}
-                        className="w-5 h-5 text-[#53BEE8] rounded focus:ring-2 focus:ring-[#53BEE8] border-gray-300"
-                      />
-                      <span className="text-gray-500 italic">フォルダ未設定の単語</span>
-                    </label>
-                  </div>
-                </div>
-
-                <div>
-                  <h3 className="text-base mb-3 text-gray-700">カード正面の表示</h3>
-                  <div className="grid grid-cols-2 gap-3">
-                    {[
-                      { value: 'japanese' as FrontDisplayType, label: '日本語', icon: '🇯🇵' },
-                      { value: 'chinese' as FrontDisplayType, label: '中国語', icon: '🇨🇳' },
-                      { value: 'english' as FrontDisplayType, label: '英語', icon: '🇬🇧' },
-                      { value: 'image' as FrontDisplayType, label: '画像', icon: '🖼️' },
-                    ].map((option) => (
-                      <button
-                        key={option.value}
-                        onClick={() => setFrontDisplayType(option.value)}
-                        className={`p-4 rounded-lg border-2 transition-all ${
-                          frontDisplayType === option.value
-                            ? 'border-[#53BEE8] bg-[#53BEE8]/5'
-                            : 'border-gray-200 hover:border-gray-300'
-                        }`}
-                      >
-                        <div className="text-2xl mb-1">{option.icon}</div>
-                        <div className="text-sm text-gray-700">{option.label}</div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="bg-blue-50 border border-blue-100 rounded-lg p-4">
-                  <p className="text-sm text-blue-800">💡 学習システムについて</p>
-                  <ul className="text-xs text-blue-700 mt-2 space-y-1 list-disc list-inside">
-                    <li>「難しい」→ 翌日に復習</li>
-                    <li>「普通」→ 3日後に復習</li>
-                    <li>「簡単」→ 1週間後に復習</li>
-                    <li>「簡単」または「普通」を2回連続 → 次のレベルへ</li>
-                    <li>「簡単」レベルで2回連続「簡単」→ 学習完了</li>
-                  </ul>
-                </div>
-              </div>
-
-              <div className="p-6 border-t border-gray-200 sticky bottom-0 bg-white rounded-b-2xl">
-                <button
-                  onClick={() => setShowSettings(false)}
-                  className="w-full py-3 bg-[#53BEE8] text-white rounded-lg hover:bg-[#53BEE8]/90 transition-colors border-none"
-                >
-                  閉じる
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-      </>
-    );
-  }
-
-  const currentWord = studyWords[currentIndex];
+  const currentWord = hasStudyWords ? studyWords[currentIndex] : null;
   const totalWords = studyWords.length;
-  const frontContent = getFrontContent(currentWord);
+  const frontContent = currentWord ? getFrontContent(currentWord) : null;
 
   const cardShell =
     'h-full rounded-[40px] bg-white/80 backdrop-blur-xl ring-1 ring-black/5 shadow-[0_18px_55px_rgba(0,0,0,0.12)] overflow-hidden';
@@ -317,7 +205,7 @@ export function FlashcardScreen({ words, folders, onUpdateWord }: FlashcardScree
         <div className="flex items-center justify-between mb-8 mt-6">
           <div className="bg-white/80 backdrop-blur-xl px-6 py-3 rounded-full shadow-md ring-1 ring-black/5">
             <span className="text-lg text-gray-700 font-medium">
-              {currentIndex + 1} / {totalWords}
+              {hasStudyWords ? currentIndex + 1 : 0} / {totalWords}
             </span>
           </div>
           <button
@@ -343,19 +231,43 @@ export function FlashcardScreen({ words, folders, onUpdateWord }: FlashcardScree
             >
               <div
                 className={`${cardShell} flex flex-col items-center justify-center p-12 relative cursor-pointer`}
-                onClick={() => setIsFlipped(true)}
+                onClick={() => {
+                  if (!hasStudyWords) {
+                    setShowSettings(true);
+                    return;
+                  }
+                  setIsFlipped(true);
+                }}
               >
                 <div className={neutralMist} />
-                {frontContent.type === 'image' ? (
+                {!hasStudyWords ? (
+                  <div className="relative z-10 flex flex-col items-center text-center">
+                    <p className="text-gray-900 text-2xl mb-3">学習する単語がありません</p>
+                    <p className="text-base text-gray-600">
+                      {selectedFolders.length === 0
+                        ? 'フォルダを選択するか、単語を追加してから学習を始めましょう'
+                        : '今日復習する単語はありません。おめでとうございます！'}
+                    </p>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowSettings(true);
+                      }}
+                      className="mt-6 px-8 py-3 bg-white/80 backdrop-blur-xl text-[#1B7FA3] rounded-full hover:bg-white transition-colors border-none shadow-md ring-1 ring-black/5"
+                    >
+                      設定を開く
+                    </button>
+                  </div>
+                ) : frontContent!.type === 'image' ? (
                   <img
-                    src={frontContent.content}
+                    src={frontContent!.content}
                     alt="flashcard"
                     className="max-w-full max-h-full object-contain rounded-3xl shadow-lg relative z-10"
                   />
                 ) : (
                   <div className="relative z-10 flex flex-col items-center">
-                    <h2 className="text-7xl md:text-8xl text-[#4a5565] break-words text-center font-['SF_Pro:Regular',sans-serif] mb-4">
-                      {frontContent.content}
+                    <h2 className="flashcard-front-text text-[#4a5565] break-words text-center font-['SF_Pro:Regular',sans-serif] mb-4">
+                      {frontContent!.content}
                     </h2>
                     <p className="text-base text-gray-400 mt-6">タップして答えを表示</p>
                   </div>
@@ -375,6 +287,24 @@ export function FlashcardScreen({ words, folders, onUpdateWord }: FlashcardScree
                 <div className={neutralMist} />
 
                 {/* ✅ ここを修正：min-h-0 + justify-start + top padding で上部の切れを防ぐ */}
+                {!hasStudyWords ? (
+                <div className="flex-1 min-h-0 flex items-center justify-center relative z-10 px-2">
+                  <div className="text-center p-8">
+                    <p className="text-gray-900 text-2xl mb-4">学習する単語がありません</p>
+                    <p className="text-base text-gray-600">
+                      {selectedFolders.length === 0
+                        ? 'フォルダを選択するか、単語を追加してから学習を始めましょう'
+                        : '今日復習する単語はありません。おめでとうございます！'}
+                    </p>
+                    <button
+                      onClick={() => setShowSettings(true)}
+                      className="mt-6 px-8 py-3 bg-white/80 backdrop-blur-xl text-[#1B7FA3] rounded-full hover:bg-white transition-colors border-none shadow-md ring-1 ring-black/5"
+                    >
+                      設定を開く
+                    </button>
+                  </div>
+                </div>
+              ) : (
                 <div className="flex-1 min-h-0 overflow-y-auto relative z-10 px-2">
                   <div className="flex flex-col items-center space-y-6 pt-6 pb-6">
                     <div className="text-center">
@@ -436,7 +366,8 @@ export function FlashcardScreen({ words, folders, onUpdateWord }: FlashcardScree
                   </div>
                 </div>
 
-                <div className="flex gap-4 mt-6 relative z-10">
+                
+              )}<div className={`flex gap-4 mt-6 relative z-10 ${!hasStudyWords ? "opacity-40 pointer-events-none" : ""}`}>
                   <button
                     onClick={() => handleNext('hard')}
                     className={`${tintButtonBase} bg-[#F7893F]/15 hover:bg-[#F7893F]/20 text-[#B85B1F]`}

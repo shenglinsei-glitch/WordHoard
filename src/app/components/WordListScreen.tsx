@@ -12,6 +12,7 @@ import {
   ChevronLeft,
   Settings,
   GripVertical,
+  X,
 } from 'lucide-react';
 import { Word, Folder } from '../types';
 
@@ -24,6 +25,8 @@ interface WordListScreenProps {
   onRemoveWordFromFolder: (wordId: string, folderId: string) => void;
   onExportData: () => void;
   onImportData: (event: React.ChangeEvent<HTMLInputElement>) => void;
+  onMoveFolder: (folderId: string, newParentId: string | null) => void;
+  onAddExistingWordsToFolder: (wordIds: string[], folderId: string) => void;
 }
 
 const UNCATEGORIZED_FOLDER_ID = 'uncategorized';
@@ -45,6 +48,8 @@ export function WordListScreen({
   onRemoveWordFromFolder,
   onExportData,
   onImportData,
+  onMoveFolder,
+  onAddExistingWordsToFolder,
 }: WordListScreenProps) {
   const navigate = useNavigate();
 
@@ -62,10 +67,21 @@ export function WordListScreen({
   const [contextMenuPos, setContextMenuPos] = useState<MenuPos | null>(null);
 
   const [showEditModal, setShowEditModal] = useState<string | null>(null);
+  const [showMoveModal, setShowMoveModal] = useState<string | null>(null);
+  const [moveTargetParentId, setMoveTargetParentId] = useState<string | null>(null);
   const [newFolderName, setNewFolderName] = useState('');
   const [editFolderName, setEditFolderName] = useState('');
 
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
+  const [showAddMenu, setShowAddMenu] = useState(false);
+  const addMenuBtnRef = useRef<HTMLButtonElement | null>(null);
+
+  // bulk add existing words (A: pick source folder -> pick words)
+  const [showBulkAddSource, setShowBulkAddSource] = useState(false);
+  const [showBulkAddWords, setShowBulkAddWords] = useState(false);
+  const [bulkSourceFolderId, setBulkSourceFolderId] = useState<string>('ALL');
+  const [bulkSearch, setBulkSearch] = useState('');
+  const [bulkSelectedIds, setBulkSelectedIds] = useState<Set<string>>(new Set());
   const [sortMode, setSortMode] = useState<SortMode>(() => {
     const v = (localStorage.getItem(LS_SORT_MODE) as SortMode | null) ?? 'alpha';
     return v === 'manual' || v === 'alpha' ? v : 'alpha';
@@ -180,6 +196,73 @@ export function WordListScreen({
     }
     if (!currentFolderId) return [];
     return words.filter((w) => w.folders?.includes(currentFolderId));
+  };
+
+  const flattenFoldersForPicker = (): { id: string; name: string; depth: number }[] => {
+    const result: { id: string; name: string; depth: number }[] = [];
+    const visit = (parentId: string | null, depth: number) => {
+      const children = folders
+        .filter((f) => (f.parentId ?? null) === (parentId ?? null))
+        .sort((a, b) => a.name.localeCompare(b.name, 'ja'));
+      for (const f of children) {
+        result.push({ id: f.id, name: f.name, depth });
+        visit(f.id, depth + 1);
+      }
+    };
+    visit(null, 0);
+    return result;
+  };
+
+  const getDescendants = (folderId: string): Set<string> => {
+    const set = new Set<string>();
+    const walk = (id: string) => {
+      const children = folders.filter((f) => (f.parentId ?? null) === id);
+      for (const c of children) {
+        if (!set.has(c.id)) {
+          set.add(c.id);
+          walk(c.id);
+        }
+      }
+    };
+    walk(folderId);
+    return set;
+  };
+
+  const getWordsInFolder = (folderId: string): Word[] => {
+    return words.filter((w) => w.folders?.includes(folderId));
+  };
+
+  const getBulkCandidates = (): Word[] => {
+    if (!currentFolderId || currentFolderId === UNCATEGORIZED_FOLDER_ID) return [];
+    let base: Word[] = [];
+    if (bulkSourceFolderId === 'ALL') {
+      base = words;
+    } else if (bulkSourceFolderId === 'UNCATEGORIZED') {
+      base = words.filter((w) => !w.folders || w.folders.length === 0);
+    } else {
+      base = getWordsInFolder(bulkSourceFolderId);
+    }
+
+    // remove words already in target folder
+    base = base.filter((w) => !w.folders?.includes(currentFolderId));
+
+    const q = bulkSearch.trim().toLowerCase();
+    if (!q) return base;
+
+    return base.filter((w) => {
+      const hay = [
+        w.word,
+        w.katakana,
+        w.chinese,
+        w.english,
+        ...(w.otherTranslations ?? []),
+        w.japaneseExplanation,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return hay.includes(q);
+    });
   };
 
   const openCreateFolder = () => {
@@ -392,11 +475,43 @@ export function WordListScreen({
           <div className="relative">
             {currentFolderId !== UNCATEGORIZED_FOLDER_ID ? (
               <button
-                onClick={openCreateFolder}
+                onClick={() => {
+                  if (currentFolderId && currentFolderId !== UNCATEGORIZED_FOLDER_ID) {
+                    setShowAddMenu((v) => !v);
+                  } else {
+                    openCreateFolder();
+                  }
+                }}
+                ref={addMenuBtnRef}
                 className="h-12 w-12 flex items-center justify-center bg-white/80 backdrop-blur-xl rounded-full shadow-md ring-1 ring-black/5 hover:bg-white transition-colors"
                 aria-label="フォルダ追加"
               >
                 <Plus size={26} className="text-[#53BEE8]" strokeWidth={2} />
+              {showAddMenu && currentFolderId && currentFolderId !== UNCATEGORIZED_FOLDER_ID && (
+                <div className="absolute right-0 mt-2 w-56 bg-white rounded-2xl shadow-lg ring-1 ring-black/5 overflow-hidden z-40">
+                  <button
+                    onClick={() => {
+                      setShowAddMenu(false);
+                      openCreateFolder();
+                    }}
+                    className="w-full px-4 py-3 text-left text-[15px] hover:bg-gray-50 transition-colors"
+                  >
+                    フォルダを追加
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowAddMenu(false);
+                      setBulkSelectedIds(new Set());
+                      setBulkSearch('');
+                      setBulkSourceFolderId('ALL');
+                      setShowBulkAddSource(true);
+                    }}
+                    className="w-full px-4 py-3 text-left text-[15px] hover:bg-gray-50 transition-colors border-t border-gray-100"
+                  >
+                    単語を追加
+                  </button>
+                </div>
+              )}
               </button>
             ) : (
               <div className="h-12 w-12" />
@@ -565,6 +680,22 @@ export function WordListScreen({
             <Edit2 size={16} className="text-gray-600" />
             <span>名前を変更</span>
           </button>
+
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              const folder = folders.find((f) => f.id === showContextMenu);
+              if (!folder) return;
+              setShowContextMenu(null);
+              setContextMenuPos(null);
+              setMoveTargetParentId(folder.parentId ?? null);
+              setShowMoveModal(folder.id);
+            }}
+            className="w-full px-4 py-2.5 hover:bg-gray-50 transition-colors flex items-center gap-2 text-left text-[15px] border-t border-gray-100"
+          >
+            <FolderIcon size={16} className="text-gray-600" />
+            <span>移動</span>
+          </button>
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -650,6 +781,218 @@ export function WordListScreen({
           </div>
         </div>
       )}
+
+      
+      {showMoveModal && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full overflow-hidden">
+            <div className="px-5 pt-5 pb-4 flex items-center justify-between">
+              <h2 className="text-[17px] font-semibold text-gray-900">フォルダを移動</h2>
+              <button
+                onClick={() => setShowMoveModal(null)}
+                className="h-9 w-9 rounded-full hover:bg-gray-100 flex items-center justify-center"
+              >
+                <X size={18} className="text-gray-600" />
+              </button>
+            </div>
+            <div className="px-5 pb-4 text-[14px] text-gray-500">
+              移動先を選択してください。
+            </div>
+            <div className="max-h-[55vh] overflow-auto border-t border-gray-100">
+              {(() => {
+                const movingId = showMoveModal;
+                const descendants = getDescendants(movingId);
+                const options = flattenFoldersForPicker().filter((f) => f.id !== movingId && !descendants.has(f.id));
+                return (
+                  <>
+                    <button
+                      onClick={() => {
+                        onMoveFolder(movingId, null);
+                        setShowMoveModal(null);
+                      }}
+                      className="w-full px-5 py-3 text-left hover:bg-gray-50 transition-colors text-[15px]"
+                    >
+                      ルート（ホーム）
+                    </button>
+                    <div className="border-t border-gray-100" />
+                    {options.map((f) => (
+                      <button
+                        key={f.id}
+                        onClick={() => {
+                          onMoveFolder(movingId, f.id);
+                          setShowMoveModal(null);
+                        }}
+                        className="w-full px-5 py-3 text-left hover:bg-gray-50 transition-colors text-[15px]"
+                        style={{ paddingLeft: 20 + f.depth * 14 }}
+                      >
+                        {f.name}
+                      </button>
+                    ))}
+                  </>
+                );
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
+
+{showBulkAddSource && currentFolderId && currentFolderId !== UNCATEGORIZED_FOLDER_ID && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full overflow-hidden">
+            <div className="px-5 pt-5 pb-4 flex items-center justify-between">
+              <h2 className="text-[17px] font-semibold text-gray-900">どのフォルダから追加しますか？</h2>
+              <button
+                onClick={() => setShowBulkAddSource(false)}
+                className="h-9 w-9 rounded-full hover:bg-gray-100 flex items-center justify-center"
+              >
+                <X size={18} className="text-gray-600" />
+              </button>
+            </div>
+            <div className="max-h-[55vh] overflow-auto">
+              <button
+                onClick={() => {
+                  setBulkSourceFolderId('ALL');
+                  setShowBulkAddSource(false);
+                  setShowBulkAddWords(true);
+                }}
+                className="w-full px-5 py-3 text-left hover:bg-gray-50 transition-colors text-[15px]"
+              >
+                すべての単語
+              </button>
+              <button
+                onClick={() => {
+                  setBulkSourceFolderId('UNCATEGORIZED');
+                  setShowBulkAddSource(false);
+                  setShowBulkAddWords(true);
+                }}
+                className="w-full px-5 py-3 text-left hover:bg-gray-50 transition-colors text-[15px] border-t border-gray-100"
+              >
+                未整理
+              </button>
+              <div className="border-t border-gray-100" />
+              {flattenFoldersForPicker()
+                .filter((f) => f.id !== currentFolderId)
+                .map((f) => (
+                  <button
+                    key={f.id}
+                    onClick={() => {
+                      setBulkSourceFolderId(f.id);
+                      setShowBulkAddSource(false);
+                      setShowBulkAddWords(true);
+                    }}
+                    className="w-full px-5 py-3 text-left hover:bg-gray-50 transition-colors text-[15px]"
+                    style={{ paddingLeft: 20 + f.depth * 14 }}
+                  >
+                    {f.name}
+                  </button>
+                ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showBulkAddWords && currentFolderId && currentFolderId !== UNCATEGORIZED_FOLDER_ID && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden">
+            <div className="px-5 pt-5 pb-4 flex items-center justify-between gap-3">
+              <h2 className="text-[17px] font-semibold text-gray-900 whitespace-nowrap">単語を選択</h2>
+              <input
+                value={bulkSearch}
+                onChange={(e) => setBulkSearch(e.target.value)}
+                placeholder="検索..."
+                className="w-full px-3 py-2 border border-gray-200 rounded-xl text-[15px] focus:outline-none focus:ring-2 focus:ring-[#53BEE8]"
+              />
+              <button
+                onClick={() => setShowBulkAddWords(false)}
+                className="h-9 w-9 rounded-full hover:bg-gray-100 flex items-center justify-center flex-shrink-0"
+              >
+                <X size={18} className="text-gray-600" />
+              </button>
+            </div>
+
+            <div className="px-5 pb-3 flex items-center justify-between text-[13px] text-gray-500">
+              <button
+                onClick={() => setBulkSelectedIds(new Set(getBulkCandidates().map((w) => w.id)))}
+                className="hover:text-[#53BEE8] transition-colors"
+              >
+                全選択
+              </button>
+              <button
+                onClick={() => setBulkSelectedIds(new Set())}
+                className="hover:text-[#53BEE8] transition-colors"
+              >
+                クリア
+              </button>
+            </div>
+
+            <div className="max-h-[55vh] overflow-auto border-t border-gray-100">
+              {getBulkCandidates().length === 0 ? (
+                <div className="px-5 py-10 text-center text-gray-500 text-[15px]">
+                  追加できる単語がありません
+                </div>
+              ) : (
+                getBulkCandidates().map((w) => {
+                  const checked = bulkSelectedIds.has(w.id);
+                  return (
+                    <label
+                      key={w.id}
+                      className="flex items-center gap-3 px-5 py-3 hover:bg-gray-50 transition-colors cursor-pointer text-[15px] border-b border-gray-100"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => {
+                          setBulkSelectedIds((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(w.id)) next.delete(w.id);
+                            else next.add(w.id);
+                            return next;
+                          });
+                        }}
+                        className="h-4 w-4"
+                      />
+                      <div className="min-w-0">
+                        <div className="font-medium text-gray-900 truncate">{w.word}</div>
+                        {(w.chinese || w.english) && (
+                          <div className="text-[13px] text-gray-500 truncate">
+                            {[w.chinese, w.english].filter(Boolean).join(' / ')}
+                          </div>
+                        )}
+                      </div>
+                    </label>
+                  );
+                })
+              )}
+            </div>
+
+            <div className="flex border-t border-gray-200">
+              <button
+                onClick={() => setShowBulkAddWords(false)}
+                className="flex-1 px-4 py-3 text-[17px] text-gray-600 hover:bg-gray-50 transition-colors"
+              >
+                キャンセル
+              </button>
+              <button
+                onClick={() => {
+                  const ids = Array.from(bulkSelectedIds);
+                  if (ids.length === 0) {
+                    setShowBulkAddWords(false);
+                    return;
+                  }
+                  onAddExistingWordsToFolder(ids, currentFolderId);
+                  setShowBulkAddWords(false);
+                  setBulkSelectedIds(new Set());
+                  setBulkSearch('');
+                }}
+                className="flex-1 px-4 py-3 text-[17px] font-semibold text-white bg-[#53BEE8] hover:opacity-90 transition-opacity"
+              >
+                追加（{bulkSelectedIds.size}）
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

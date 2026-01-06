@@ -244,6 +244,28 @@ function App() {
         : folder
     ));
   };
+  const handleMoveFolder = (folderId: string, newParentId: string | null) => {
+    setFolders(
+      folders.map((f) =>
+        f.id === folderId
+          ? { ...f, parentId: newParentId ?? null }
+          : f
+      )
+    );
+  };
+
+  const handleAddExistingWordsToFolder = (wordIds: string[], folderId: string) => {
+    if (!folderId) return;
+    const idSet = new Set(wordIds);
+    setWords(
+      words.map((w) => {
+        if (!idSet.has(w.id)) return w;
+        const prev = w.folders ?? [];
+        if (prev.includes(folderId)) return w;
+        return { ...w, folders: [...prev, folderId] };
+      })
+    );
+  };
 
   const handleDeleteFolder = (id: string) => {
     // フォルダを削除し、そのフォダ内の単語のフォルダ参照を削除
@@ -290,6 +312,8 @@ function App() {
                   onRemoveWordFromFolder={handleRemoveWordFromFolder}
                   onExportData={handleExportData}
                   onImportData={handleImportData}
+                  onMoveFolder={handleMoveFolder}
+                  onAddExistingWordsToFolder={handleAddExistingWordsToFolder}
                 />
                 <Navigation />
               </>

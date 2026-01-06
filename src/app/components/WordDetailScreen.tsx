@@ -66,7 +66,7 @@ export function WordDetailScreen({ words, folders }: Props) {
         {/* Floating header buttons (same direction as Home/Flashcard) */}
         <div className="relative flex items-center justify-between mt-6 mb-6">
           <button
-            onClick={() => navigate(-1)}
+            onClick={() => navigate('/list')}
             className="h-12 w-12 flex items-center justify-center bg-white/80 backdrop-blur-xl rounded-full shadow-md ring-1 ring-black/5 hover:bg-white transition-colors"
             aria-label="戻る"
           >

@@ -4,9 +4,10 @@ import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
-  base: '/jici/',
+  // GitHub Pages（https://<user>.github.io/WordHoard/）用
+  base: '/WordHoard/',
 
-  // ✅ npm run build の出力先を dist ではなく docs にする（GitHub Pages 用）
+  // ✅ npm run build の出力先を dist ではなく docs にする（GitHub Pages の /docs 配信に対応）
   build: {
     outDir: 'docs',
     emptyOutDir: true,
@@ -20,8 +21,8 @@ export default defineConfig({
       manifest: {
         name: '积词',
         short_name: '积词',
-        start_url: '/jici/',
-        scope: '/jici/',
+        start_url: '/WordHoard/',
+        scope: '/WordHoard/',
         display: 'standalone',
         background_color: '#ffffff',
         theme_color: '#53BEE8',

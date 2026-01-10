@@ -1,5 +1,5 @@
-import { useMemo } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useCallback, useMemo } from 'react';
+import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { ArrowLeft, Edit3, Folder as FolderIcon, Volume2 } from 'lucide-react';
 import { Word, Folder } from '../types';
 
@@ -35,6 +35,24 @@ function formatDate(dateStr?: string) {
 export function WordDetailScreen({ words, folders }: Props) {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
+
+  // Back should return to the folder if came from a folder
+  const handleBack = useCallback(() => {
+    const fromFolderId = (location.state as { fromFolderId?: string })?.fromFolderId;
+    
+    if (fromFolderId) {
+      // Return to the folder we came from
+      sessionStorage.setItem('selectedFolderId', fromFolderId);
+      navigate('/list');
+    } else if (window.history.length > 1) {
+      // Navigate back in history
+      navigate(-1);
+    } else {
+      // Fallback to list page
+      navigate('/list');
+    }
+  }, [navigate, location.state]);
 
   const word = useMemo(() => words.find((w) => w.id === id), [words, id]);
   if (!word) return null;
@@ -66,7 +84,7 @@ export function WordDetailScreen({ words, folders }: Props) {
         {/* Floating header buttons (same direction as Home/Flashcard) */}
         <div className="relative flex items-center justify-between mt-6 mb-6">
           <button
-            onClick={() => navigate('/list')}
+            onClick={handleBack}
             className="h-12 w-12 flex items-center justify-center bg-white/80 backdrop-blur-xl rounded-full shadow-md ring-1 ring-black/5 hover:bg-white transition-colors"
             aria-label="戻る"
           >

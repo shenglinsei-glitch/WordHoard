@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Folder as FolderIcon,
   ChevronRight,
@@ -52,6 +52,7 @@ export function WordListScreen({
   onAddExistingWordsToFolder,
 }: WordListScreenProps) {
   const navigate = useNavigate();
+  const location = useLocation();
 
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(() => {
     const savedFolderId = sessionStorage.getItem('selectedFolderId');
@@ -102,16 +103,18 @@ export function WordListScreen({
     const onDown = (e: MouseEvent) => {
       const target = e.target as HTMLElement | null;
       if (!target) return;
-      if (target.closest('[data-context-menu="true"]') || target.closest('[data-settings-menu="true"]')) return;
+      if (target.closest('[data-context-menu="true"]') || target.closest('[data-settings-menu="true"]') || target.closest('[data-add-menu="true"]') || target.closest('[data-add-menu-btn="true"]')) return;
       setShowContextMenu(null);
       setContextMenuPos(null);
       setShowSettingsMenu(false);
+      setShowAddMenu(false);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setShowContextMenu(null);
         setContextMenuPos(null);
         setShowSettingsMenu(false);
+        setShowAddMenu(false);
       }
     };
     document.addEventListener('mousedown', onDown);
@@ -121,6 +124,14 @@ export function WordListScreen({
       document.removeEventListener('keydown', onKey);
     };
   }, []);
+
+  // Close header menus on route change (e.g., navigate to detail/edit and back)
+  useEffect(() => {
+    setShowAddMenu(false);
+    setShowSettingsMenu(false);
+    setShowContextMenu(null);
+    setContextMenuPos(null);
+  }, [location.pathname, location.search, location.hash]);
 
   const handleExport = () => {
     onExportData();
@@ -474,45 +485,48 @@ export function WordListScreen({
           {/* Right: Add folder */}
           <div className="relative">
             {currentFolderId !== UNCATEGORIZED_FOLDER_ID ? (
-              <button
-                onClick={() => {
-                  if (currentFolderId && currentFolderId !== UNCATEGORIZED_FOLDER_ID) {
-                    setShowAddMenu((v) => !v);
-                  } else {
-                    openCreateFolder();
-                  }
-                }}
-                ref={addMenuBtnRef}
-                className="h-12 w-12 flex items-center justify-center bg-white/80 backdrop-blur-xl rounded-full shadow-md ring-1 ring-black/5 hover:bg-white transition-colors"
-                aria-label="フォルダ追加"
-              >
-                <Plus size={26} className="text-[#53BEE8]" strokeWidth={2} />
-              {showAddMenu && currentFolderId && currentFolderId !== UNCATEGORIZED_FOLDER_ID && (
-                <div className="absolute right-0 mt-2 w-56 bg-white rounded-2xl shadow-lg ring-1 ring-black/5 overflow-hidden z-40">
-                  <button
-                    onClick={() => {
-                      setShowAddMenu(false);
+              <>
+                <button
+                  onClick={() => {
+                    if (currentFolderId && currentFolderId !== UNCATEGORIZED_FOLDER_ID) {
+                      setShowAddMenu((v) => !v);
+                    } else {
                       openCreateFolder();
-                    }}
-                    className="w-full px-4 py-3 text-left text-[15px] hover:bg-gray-50 transition-colors"
-                  >
-                    フォルダを追加
-                  </button>
-                  <button
-                    onClick={() => {
-                      setShowAddMenu(false);
-                      setBulkSelectedIds(new Set());
-                      setBulkSearch('');
-                      setBulkSourceFolderId('ALL');
-                      setShowBulkAddSource(true);
-                    }}
-                    className="w-full px-4 py-3 text-left text-[15px] hover:bg-gray-50 transition-colors border-t border-gray-100"
-                  >
-                    単語を追加
-                  </button>
-                </div>
-              )}
-              </button>
+                    }
+                  }}
+                  ref={addMenuBtnRef}
+                  className="h-12 w-12 flex items-center justify-center bg-white/80 backdrop-blur-xl rounded-full shadow-md ring-1 ring-black/5 hover:bg-white transition-colors"
+                  aria-label="フォルダ追加"
+                  data-add-menu-btn="true"
+                >
+                  <Plus size={26} className="text-[#53BEE8]" strokeWidth={2} />
+                </button>
+                {showAddMenu && currentFolderId && currentFolderId !== UNCATEGORIZED_FOLDER_ID && (
+                  <div data-add-menu="true" className="absolute right-0 mt-2 w-56 bg-white rounded-2xl shadow-lg ring-1 ring-black/5 overflow-hidden z-40">
+                    <button
+                      onClick={() => {
+                        setShowAddMenu(false);
+                        openCreateFolder();
+                      }}
+                      className="w-full px-4 py-3 text-left text-[15px] hover:bg-gray-50 transition-colors"
+                    >
+                      フォルダを追加
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowAddMenu(false);
+                        setBulkSelectedIds(new Set());
+                        setBulkSearch('');
+                        setBulkSourceFolderId('ALL');
+                        setShowBulkAddSource(true);
+                      }}
+                      className="w-full px-4 py-3 text-left text-[15px] hover:bg-gray-50 transition-colors border-t border-gray-100"
+                    >
+                      単語を追加
+                    </button>
+                  </div>
+                )}
+              </>
             ) : (
               <div className="h-12 w-12" />
             )}
@@ -635,7 +649,13 @@ export function WordListScreen({
                 currentWords.map((word) => (
                   <button
                     key={word.id}
-                    onClick={() => navigate(`/detail/${word.id}`)}
+                    onClick={() => {
+                      // Store current folder ID in sessionStorage for back navigation
+                      if (currentFolderId) {
+                        sessionStorage.setItem('selectedFolderId', currentFolderId);
+                      }
+                      navigate(`/detail/${word.id}`, { state: { fromFolderId: currentFolderId } });
+                    }}
                     className="w-full px-4 py-3 flex items-center justify-between hover:bg-gray-50 transition-colors border-b border-gray-100 last:border-b-0"
                   >
                     <div className="flex items-center gap-3 flex-1 min-w-0">

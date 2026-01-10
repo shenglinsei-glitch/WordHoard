@@ -27,8 +27,8 @@ export default defineConfig({
         background_color: '#ffffff',
         theme_color: '#53BEE8',
         icons: [
-          { src: '/jici/pwa-192x192.png', sizes: '192x192', type: 'image/png' },
-          { src: '/jici/pwa-512x512.png', sizes: '512x512', type: 'image/png' },
+          { src: '/WordHoard/pwa-192x192.png', sizes: '192x192', type: 'image/png' },
+          { src: '/WordHoard/pwa-512x512.png', sizes: '512x512', type: 'image/png' },
         ],
       },
     }),

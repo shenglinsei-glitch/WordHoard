@@ -1,210 +1,215 @@
-// Small TTS helper for Web Speech API.
-// Goals (esp. for Japanese):
-// - Speak original text (no IPA required)
-// - Keep voice stable across repeated speaks (avoid "first ok, then switches/flat")
-// - Avoid volume/prosody drifting in rapid sequences (list autoplay)
-// - Provide Promise-based speak for sequential playback
-
+// 经过优化的 TTS 辅助工具
 export type TtsLang = 'ja-JP' | 'en-US' | 'en-GB' | 'zh-CN' | string;
 
-const RE_JA = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/; // Hiragana/Katakana + CJK
+const RE_JA = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/;
 const RE_LATIN = /[A-Za-z]/;
+
+function isAppleMobile(): boolean {
+  const ua = navigator.userAgent || '';
+  const isIOS = /iPad|iPhone|iPod/i.test(ua);
+  const isIPadOS = ua.includes('Macintosh') && (navigator as any).maxTouchPoints > 1;
+  return isIOS || isIPadOS;
+}
 
 export function guessLang(text: string, opts?: { preferJa?: boolean }): TtsLang {
   const t = (text ?? '').trim();
   if (!t) return 'en-US';
   if (opts?.preferJa) return 'ja-JP';
-
-  // Japanese: kana or kanji
   if (RE_JA.test(t)) return 'ja-JP';
-
-  // Latin letters -> English
   if (RE_LATIN.test(t)) return 'en-US';
-
   return 'en-US';
 }
 
-function normLang(lang: string) {
-  return String(lang ?? '').toLowerCase();
+/**
+ * 核心优化：筛选高质量语音包
+ */
+function pickVoice(lang: string): SpeechSynthesisVoice | undefined {
+  const voices = window.speechSynthesis.getVoices?.() ?? [];
+  if (!voices.length) return undefined;
+
+  // 统一语言格式 (例如 zh-CN vs zh_CN)
+  const targetLang = lang.toLowerCase().replace('_', '-');
+  const sameLang = voices.filter((v) => (v.lang ?? '').toLowerCase().replace('_', '-').startsWith(targetLang));
+  
+  const pool = sameLang.length ? sameLang : voices;
+
+  // 优先级排序：神经网络声音 > 厂商优质声音 > 普通声音
+  const getPriority = (v: SpeechSynthesisVoice) => {
+    const name = (v.name ?? '').toLowerCase();
+    // 优先选择包含这些关键字的语音，它们通常音质更高、音量更饱满
+    if (name.includes('natural') || name.includes('neural')) return 10;
+    if (name.includes('google')) return 8; // Google 在线语音通常很好听
+    if (name.includes('premium') || name.includes('enhanced')) return 7;
+    if (name.includes('apple') || name.includes('microsoft')) return 5;
+    if (['nanami', 'kyoko', 'samantha', 'meijia'].some(n => name.includes(n))) return 3;
+    return 0;
+  };
+
+  return [...pool].sort((a, b) => getPriority(b) - getPriority(a))[0];
 }
 
-// Cache chosen voice per language to avoid drifting/switching between calls.
-const VOICE_CACHE = new Map<string, { name: string; lang: string; voiceURI?: string }>();
+const VOICE_CACHE = new Map<string, { name: string; lang: string }>();
 
-function getVoices(): SpeechSynthesisVoice[] {
-  try {
-    return window.speechSynthesis?.getVoices?.() ?? [];
-  } catch {
-    return [];
-  }
+function normLang(lang: string) {
+  return String(lang ?? '').toLowerCase();
 }
 
 function getCachedVoice(lang: string): SpeechSynthesisVoice | undefined {
   const key = normLang(lang);
   const cached = VOICE_CACHE.get(key);
   if (!cached) return undefined;
-  const voices = getVoices();
-  return voices.find((v) => (v.name ?? '') === cached.name && (v.lang ?? '') === cached.lang) ??
-         voices.find((v) => (v.voiceURI ?? '') === (cached.voiceURI ?? '') && (v.lang ?? '') === cached.lang);
+  const voices = window.speechSynthesis.getVoices?.() ?? [];
+  return voices.find((v) => (v.name ?? '') === cached.name && (v.lang ?? '') === cached.lang);
 }
 
 function cacheVoice(lang: string, v: SpeechSynthesisVoice) {
-  VOICE_CACHE.set(normLang(lang), { name: v.name ?? '', lang: v.lang ?? '', voiceURI: (v as any).voiceURI });
+  VOICE_CACHE.set(normLang(lang), { name: v.name ?? '', lang: v.lang ?? '' });
 }
 
-function pickVoice(lang: string): SpeechSynthesisVoice | undefined {
-  const voices = getVoices();
-  if (!voices.length) return undefined;
+export function speakText(
+  text: string,
+  lang: TtsLang,
+  opts?: {
+    rate?: number;
+    pitch?: number;
+    volume?: number;
+    interrupt?: boolean;
+  }
+) {
+  const t = (text ?? '').trim();
+  if (!t) return;
 
-  const want = normLang(lang);
-  const sameLang = voices.filter((v) => normLang(v.lang ?? '').startsWith(want));
-  const pool = sameLang.length ? sameLang : voices;
+  if (!('speechSynthesis' in window)) {
+    console.warn('Speech synthesis not supported');
+    return;
+  }
 
-  // Prefer higher quality / natural voices when present.
-  const score = (v: SpeechSynthesisVoice) => {
-    const name = (v.name ?? '').toLowerCase();
-    let s = 0;
-    if (name.includes('natural')) s += 50;
-    if (name.includes('neural')) s += 45;
-    if (name.includes('google')) s += 35;
-    if (name.includes('kyoko')) s += 30;
-    if (name.includes('otoya')) s += 30;
-    if (name.includes('nanami')) s += 30;
-    if (name.includes('microsoft')) s += 20;
+  const synth = window.speechSynthesis;
+  const appleMobile = isAppleMobile();
+  let shouldInterrupt = opts?.interrupt !== false;
 
-    // Slightly de-prioritize very "compact"/"offline" voices if labeled.
-    if (name.includes('compact')) s -= 10;
-    if (name.includes('offline')) s -= 5;
+  if (appleMobile && !synth.speaking && !synth.pending) {
+    shouldInterrupt = false;
+  }
+  
+  if (shouldInterrupt) {
+    try { synth.cancel(); } catch { }
+  }
 
-    // Prefer default voice a bit (often well-integrated)
-    if ((v as any).default) s += 5;
-    return s;
+  const utter = new SpeechSynthesisUtterance(t);
+  utter.lang = lang;
+  
+  // --- 优化参数设置 ---
+  utter.volume = opts?.volume ?? 1.0; // 默认满音量
+  utter.rate = opts?.rate ?? 1.0;     // 默认标准语速
+  
+  // 针对日语微调，防止声音太“平”
+  const isJa = String(lang).toLowerCase().startsWith('ja');
+  utter.pitch = opts?.pitch ?? (isJa ? 1.05 : 1.0); 
+
+  const doSpeak = () => {
+    // 延迟处理，防止在某些浏览器上音量突变或被切断
+    const delay = shouldInterrupt ? (appleMobile ? 150 : 50) : 0;
+    setTimeout(() => {
+      try { synth.speak(utter); } catch (e) { console.error(e); }
+    }, delay);
   };
 
-  return pool.slice().sort((a, b) => score(b) - score(a))[0];
+  const assignVoiceAndSpeak = () => {
+    const cached = getCachedVoice(lang);
+    if (appleMobile && !cached) {
+      doSpeak(); // iOS 初次调用建议让系统自动选择
+      return;
+    }
+    const v = cached ?? pickVoice(lang);
+    if (v) {
+      utter.voice = v;
+      cacheVoice(lang, v);
+    }
+    doSpeak();
+  };
+
+  const voicesNow = synth.getVoices();
+  if (voicesNow.length) {
+    assignVoiceAndSpeak();
+  } else {
+    const handler = () => {
+      synth.removeEventListener('voiceschanged', handler);
+      assignVoiceAndSpeak();
+    };
+    synth.addEventListener('voiceschanged', handler);
+    setTimeout(handler, 350); // 兜底
+  }
 }
 
-// Ensure voices list is actually populated before first speak.
-// This prevents "first speak uses default voice, later switches" behavior.
-async function ensureVoicesReady(timeoutMs: number = 2000): Promise<void> {
-  const synth = window.speechSynthesis;
-  if (!synth?.getVoices) return;
+/**
+ * Promise 版本的异步朗读（适合队列播放）
+ */
+export function speakTextAsync(
+  text: string,
+  lang: TtsLang,
+  opts?: {
+    rate?: number;
+    pitch?: number;
+    volume?: number;
+    interrupt?: boolean;
+  }
+): Promise<void> {
+  return new Promise((resolve) => {
+    const t = (text ?? '').trim();
+    if (!t) return resolve();
+    if (!('speechSynthesis' in window)) return resolve();
 
-  const start = Date.now();
-  if (getVoices().length) return;
+    const synth = window.speechSynthesis;
+    const appleMobile = isAppleMobile();
 
-  await new Promise<void>((resolve) => {
-    let done = false;
+    let shouldInterrupt = opts?.interrupt !== false;
+    if (appleMobile && !synth.speaking && !synth.pending) {
+      shouldInterrupt = false;
+    }
+    if (shouldInterrupt) {
+      try { synth.cancel(); } catch { }
+    }
 
-    const finish = () => {
-      if (done) return;
-      done = true;
-      try {
-        synth.removeEventListener?.('voiceschanged', onChanged);
-      } catch {}
-      resolve();
+    const utter = new SpeechSynthesisUtterance(t);
+    utter.lang = lang;
+    utter.volume = opts?.volume ?? 1.0;
+    utter.rate = opts?.rate ?? 1.0;
+    const isJa = String(lang).toLowerCase().startsWith('ja');
+    utter.pitch = opts?.pitch ?? (isJa ? 1.05 : 1.0);
+
+    utter.onend = () => resolve();
+    utter.onerror = () => resolve();
+
+    const assignVoiceAndSpeak = () => {
+      const cached = getCachedVoice(lang);
+      const v = cached ?? pickVoice(lang);
+      if (v && !(appleMobile && !cached)) {
+        utter.voice = v;
+        cacheVoice(lang, v);
+      }
+      const delay = shouldInterrupt ? (appleMobile ? 150 : 50) : 0;
+      setTimeout(() => {
+        try { synth.speak(utter); } catch { resolve(); }
+      }, delay);
     };
 
-    const onChanged = () => {
-      if (getVoices().length) finish();
-    };
-
-    try {
-      synth.addEventListener?.('voiceschanged', onChanged);
-    } catch {}
-
-    // Poll as a fallback (some browsers don't fire voiceschanged reliably)
-    const tick = () => {
-      if (done) return;
-      if (getVoices().length) return finish();
-      if (Date.now() - start >= timeoutMs) return finish();
-      setTimeout(tick, 100);
-    };
-    tick();
+    const voicesNow = synth.getVoices();
+    if (voicesNow.length) {
+      assignVoiceAndSpeak();
+    } else {
+      const handler = () => {
+        synth.removeEventListener('voiceschanged', handler);
+        assignVoiceAndSpeak();
+      };
+      synth.addEventListener('voiceschanged', handler);
+      setTimeout(handler, 350);
+    }
   });
 }
 
 export function stopTts() {
   try {
     window.speechSynthesis?.cancel?.();
-  } catch {
-    // ignore
-  }
-}
-
-type SpeakOpts = {
-  rate?: number;
-  pitch?: number;
-  volume?: number;
-  interrupt?: boolean; // cancel before speaking
-  delayMs?: number;    // delay after cancel
-};
-
-// Internal core: returns a Promise resolved on end/error so we can chain sequential playback.
-async function speakCore(text: string, lang: TtsLang, opts?: SpeakOpts): Promise<void> {
-  const t = (text ?? '').trim();
-  if (!t) return;
-
-  if (!('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') return;
-
-  const synth = window.speechSynthesis;
-
-  // IMPORTANT: ensure voices are loaded before the first utterance
-  await ensureVoicesReady(2000);
-
-  const shouldInterrupt = opts?.interrupt !== false;
-
-  if (shouldInterrupt) {
-    try { synth.cancel(); } catch {}
-  }
-
-  const utter = new SpeechSynthesisUtterance(t);
-  utter.lang = lang;
-
-  const isJa = normLang(lang).startsWith('ja');
-  const isEn = normLang(lang).startsWith('en');
-
-  utter.volume = opts?.volume ?? 1;
-  utter.rate = opts?.rate ?? (isJa ? 0.95 : isEn ? 0.95 : 1);
-  // For Japanese, keep pitch at 1.0 by default (more natural + stable across voices)
-  utter.pitch = opts?.pitch ?? 1.0;
-
-  // Lock voice
-  const cached = getCachedVoice(lang);
-  const v = cached ?? pickVoice(lang);
-  if (v) {
-    utter.voice = v;
-    cacheVoice(lang, v);
-  }
-
-  const delay = shouldInterrupt ? Math.max(0, opts?.delayMs ?? 40) : 0;
-
-  await new Promise<void>((resolve) => {
-    let done = false;
-    const finish = () => {
-      if (done) return;
-      done = true;
-      resolve();
-    };
-    utter.onend = finish;
-    utter.onerror = finish;
-
-    setTimeout(() => {
-      try {
-        synth.speak(utter);
-      } catch {
-        finish();
-      }
-    }, delay);
-  });
-}
-
-// Fire-and-forget API (single click speak)
-export function speakText(text: string, lang: TtsLang, opts?: SpeakOpts) {
-  void speakCore(text, lang, opts);
-}
-
-// Promise API (for list autoplay)
-export function speakTextAsync(text: string, lang: TtsLang, opts?: SpeakOpts): Promise<void> {
-  return speakCore(text, lang, opts);
+  } catch { }
 }

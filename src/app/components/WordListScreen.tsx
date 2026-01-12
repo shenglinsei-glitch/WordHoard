@@ -134,7 +134,7 @@ export function WordListScreen({
       const text = list[i];
       const lang = guessLang(text);
 
-      await speakTextAsync(text, lang, { cancelBeforeSpeak: true });
+      await speakTextAsync(text, lang, { interrupt: true });
 
       // small gap between items
       await new Promise((r) => setTimeout(r, 250));

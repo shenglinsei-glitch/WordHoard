@@ -38,10 +38,12 @@ function pickVoice(lang: string): SpeechSynthesisVoice | undefined {
     const name = (v.name ?? '').toLowerCase();
     // 优先选择包含这些关键字的语音，它们通常音质更高、音量更饱满
     if (name.includes('natural') || name.includes('neural')) return 10;
+    // iOS/iPadOS 的日语男声（Otoya）优先锁定
+    if (name.includes('otoya')) return 9;
     if (name.includes('google')) return 8; // Google 在线语音通常很好听
     if (name.includes('premium') || name.includes('enhanced')) return 7;
     if (name.includes('apple') || name.includes('microsoft')) return 5;
-    if (['nanami', 'kyoko', 'samantha', 'meijia'].some(n => name.includes(n))) return 3;
+    if (['otoya', 'o-ren', 'nanami', 'kyoko', 'samantha', 'meijia'].some(n => name.includes(n))) return 3;
     return 0;
   };
 
@@ -105,7 +107,7 @@ export function speakText(
   
   // 针对日语微调，防止声音太“平”
   const isJa = String(lang).toLowerCase().startsWith('ja');
-  utter.pitch = opts?.pitch ?? (isJa ? 1.05 : 1.0); 
+  utter.pitch = opts?.pitch ?? (isJa ? (appleMobile ? 1.0 : 1.05) : 1.0); 
 
   const doSpeak = () => {
     // 延迟处理，防止在某些浏览器上音量突变或被切断
@@ -117,10 +119,6 @@ export function speakText(
 
   const assignVoiceAndSpeak = () => {
     const cached = getCachedVoice(lang);
-    if (appleMobile && !cached) {
-      doSpeak(); // iOS 初次调用建议让系统自动选择
-      return;
-    }
     const v = cached ?? pickVoice(lang);
     if (v) {
       utter.voice = v;
@@ -176,7 +174,7 @@ export function speakTextAsync(
     utter.volume = opts?.volume ?? 1.0;
     utter.rate = opts?.rate ?? 1.0;
     const isJa = String(lang).toLowerCase().startsWith('ja');
-    utter.pitch = opts?.pitch ?? (isJa ? 1.05 : 1.0);
+    utter.pitch = opts?.pitch ?? (isJa ? (appleMobile ? 1.0 : 1.05) : 1.0);
 
     utter.onend = () => resolve();
     utter.onerror = () => resolve();
@@ -184,7 +182,7 @@ export function speakTextAsync(
     const assignVoiceAndSpeak = () => {
       const cached = getCachedVoice(lang);
       const v = cached ?? pickVoice(lang);
-      if (v && !(appleMobile && !cached)) {
+      if (v) {
         utter.voice = v;
         cacheVoice(lang, v);
       }

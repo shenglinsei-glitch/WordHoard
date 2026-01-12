@@ -1,4 +1,4 @@
-// 经过优化的 TTS 辅助工具
+// 最终兼容版：同时优化 PC (Chrome/Edge) 与 iOS (Safari)
 export type TtsLang = 'ja-JP' | 'en-US' | 'en-GB' | 'zh-CN' | string;
 
 const RE_JA = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/;
@@ -21,31 +21,41 @@ export function guessLang(text: string, opts?: { preferJa?: boolean }): TtsLang 
 }
 
 /**
- * 核心优化：筛选高质量语音包
+ * 核心筛选逻辑：智能权重
  */
 function pickVoice(lang: string): SpeechSynthesisVoice | undefined {
   const voices = window.speechSynthesis.getVoices?.() ?? [];
   if (!voices.length) return undefined;
 
-  // 统一语言格式 (例如 zh-CN vs zh_CN)
   const targetLang = lang.toLowerCase().replace('_', '-');
+  // 过滤出语种匹配的声音
   const sameLang = voices.filter((v) => (v.lang ?? '').toLowerCase().replace('_', '-').startsWith(targetLang));
   
   const pool = sameLang.length ? sameLang : voices;
 
-  // 优先级排序：神经网络声音 > 厂商优质声音 > 普通声音
   const getPriority = (v: SpeechSynthesisVoice) => {
     const name = (v.name ?? '').toLowerCase();
-    // 优先选择包含这些关键字的语音，它们通常音质更高、音量更饱满
-    if (name.includes('natural') || name.includes('neural')) return 10;
-    if (name.includes('google')) return 8; // Google 在线语音通常很好听
-    if (name.includes('premium') || name.includes('enhanced')) return 7;
-    if (name.includes('apple') || name.includes('microsoft')) return 5;
-    if (['nanami', 'kyoko', 'samantha', 'meijia'].some(n => name.includes(n))) return 3;
-    return 0;
+    let score = 0;
+
+    // 1. 最高优先级：PC 端的神经网络声音 (Google/Microsoft Online)
+    if (name.includes('online') || name.includes('neural') || name.includes('natural')) score += 100;
+    
+    // 2. 厂商权重 (Google 和 Microsoft 的 Web 语音通常音质和音量最好)
+    if (name.includes('google')) score += 50;
+    if (name.includes('microsoft')) score += 40;
+
+    // 3. 针对 iOS 的权重 (匹配你截图中的“拡張”或“Enhanced”)
+    if (name.includes('拡張') || name.includes('expanded') || name.includes('enhanced') || name.includes('premium')) score += 60;
+    
+    // 4. 角色权重
+    if (['nanami', 'otoya', 'kyoko', 'samantha'].some(n => name.includes(n))) score += 20;
+
+    return score;
   };
 
-  return [...pool].sort((a, b) => getPriority(b) - getPriority(a))[0];
+  // 排序并取最高分
+  const sorted = [...pool].sort((a, b) => getPriority(b) - getPriority(a));
+  return sorted[0];
 }
 
 const VOICE_CACHE = new Map<string, { name: string; lang: string }>();
@@ -79,10 +89,7 @@ export function speakText(
   const t = (text ?? '').trim();
   if (!t) return;
 
-  if (!('speechSynthesis' in window)) {
-    console.warn('Speech synthesis not supported');
-    return;
-  }
+  if (!('speechSynthesis' in window)) return;
 
   const synth = window.speechSynthesis;
   const appleMobile = isAppleMobile();
@@ -98,27 +105,24 @@ export function speakText(
 
   const utter = new SpeechSynthesisUtterance(t);
   utter.lang = lang;
+  utter.volume = opts?.volume ?? 1.0; 
+  utter.rate = opts?.rate ?? 1.0;     
   
-  // --- 优化参数设置 ---
-  utter.volume = opts?.volume ?? 1.0; // 默认满音量
-  utter.rate = opts?.rate ?? 1.0;     // 默认标准语速
-  
-  // 针对日语微调，防止声音太“平”
   const isJa = String(lang).toLowerCase().startsWith('ja');
-  utter.pitch = opts?.pitch ?? (isJa ? 1.05 : 1.0); 
+  utter.pitch = opts?.pitch ?? (isJa ? 1.0 : 1.0); 
 
   const doSpeak = () => {
-    // 延迟处理，防止在某些浏览器上音量突变或被切断
-    const delay = shouldInterrupt ? (appleMobile ? 150 : 50) : 0;
+    const delay = shouldInterrupt ? (appleMobile ? 150 : 30) : 0;
     setTimeout(() => {
-      try { synth.speak(utter); } catch (e) { console.error(e); }
+      try { synth.speak(utter); } catch (e) { }
     }, delay);
   };
 
   const assignVoiceAndSpeak = () => {
+    // PC 端优先使用缓存，iOS 初次尝试让系统选（为了稳定）
     const cached = getCachedVoice(lang);
     if (appleMobile && !cached) {
-      doSpeak(); // iOS 初次调用建议让系统自动选择
+      doSpeak();
       return;
     }
     const v = cached ?? pickVoice(lang);
@@ -138,13 +142,11 @@ export function speakText(
       assignVoiceAndSpeak();
     };
     synth.addEventListener('voiceschanged', handler);
-    setTimeout(handler, 350); // 兜底
+    setTimeout(handler, 300);
   }
 }
 
-/**
- * Promise 版本的异步朗读（适合队列播放）
- */
+// Promise 版异步播放（逻辑同上）
 export function speakTextAsync(
   text: string,
   lang: TtsLang,
@@ -157,38 +159,29 @@ export function speakTextAsync(
 ): Promise<void> {
   return new Promise((resolve) => {
     const t = (text ?? '').trim();
-    if (!t) return resolve();
-    if (!('speechSynthesis' in window)) return resolve();
+    if (!t || !('speechSynthesis' in window)) return resolve();
 
     const synth = window.speechSynthesis;
     const appleMobile = isAppleMobile();
-
     let shouldInterrupt = opts?.interrupt !== false;
-    if (appleMobile && !synth.speaking && !synth.pending) {
-      shouldInterrupt = false;
-    }
-    if (shouldInterrupt) {
-      try { synth.cancel(); } catch { }
-    }
+
+    if (appleMobile && !synth.speaking && !synth.pending) shouldInterrupt = false;
+    if (shouldInterrupt) { try { synth.cancel(); } catch { } }
 
     const utter = new SpeechSynthesisUtterance(t);
     utter.lang = lang;
     utter.volume = opts?.volume ?? 1.0;
     utter.rate = opts?.rate ?? 1.0;
-    const isJa = String(lang).toLowerCase().startsWith('ja');
-    utter.pitch = opts?.pitch ?? (isJa ? 1.05 : 1.0);
-
     utter.onend = () => resolve();
     utter.onerror = () => resolve();
 
     const assignVoiceAndSpeak = () => {
-      const cached = getCachedVoice(lang);
-      const v = cached ?? pickVoice(lang);
-      if (v && !(appleMobile && !cached)) {
+      const v = getCachedVoice(lang) ?? pickVoice(lang);
+      if (v) {
         utter.voice = v;
         cacheVoice(lang, v);
       }
-      const delay = shouldInterrupt ? (appleMobile ? 150 : 50) : 0;
+      const delay = shouldInterrupt ? (appleMobile ? 150 : 30) : 0;
       setTimeout(() => {
         try { synth.speak(utter); } catch { resolve(); }
       }, delay);
@@ -203,13 +196,11 @@ export function speakTextAsync(
         assignVoiceAndSpeak();
       };
       synth.addEventListener('voiceschanged', handler);
-      setTimeout(handler, 350);
+      setTimeout(handler, 300);
     }
   });
 }
 
 export function stopTts() {
-  try {
-    window.speechSynthesis?.cancel?.();
-  } catch { }
+  try { window.speechSynthesis?.cancel?.(); } catch { }
 }

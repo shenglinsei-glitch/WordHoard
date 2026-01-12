@@ -14,12 +14,11 @@ import {
   GripVertical,
   X,
   Volume2,
-  Play,
-  Pause,
-  Repeat,
 } from 'lucide-react';
 import { Word, Folder } from '../types';
 import { guessLang, speakText, speakTextAsync, stopTts } from '../utils/tts';
+import { Play, Pause, Repeat } from 'lucide-react';
+
 interface WordListScreenProps {
   words: Word[];
   folders: Folder[];
@@ -42,6 +41,13 @@ const LS_SORT_MODE = 'wordlist_folder_sort_mode_v2';
 // TypeScript: Folder doesn't define orderInParent, so we access it via (folder as any).orderInParent.
 
 type MenuPos = { top: number; left: number; placement: 'down' | 'up' };
+
+const isAppleMobile = () => {
+  const ua = navigator.userAgent || '';
+  const isIOS = /iPad|iPhone|iPod/i.test(ua);
+  const isIPadOS = ua.includes('Macintosh') && (navigator as any).maxTouchPoints > 1;
+  return isIOS || isIPadOS;
+};
 
 export function WordListScreen({
   words,
@@ -104,8 +110,6 @@ export function WordListScreen({
     const lang = guessLang(text);
     speakText(text, lang);
   };
-
-  // Auto-play (folder word list)
   const [isAutoPlaying, setIsAutoPlaying] = useState(false);
   const [autoLoop, setAutoLoop] = useState(false);
   const playTokenRef = useRef(0);
@@ -120,8 +124,8 @@ export function WordListScreen({
     const token = playTokenRef.current + 1;
     playTokenRef.current = token;
 
-    // Use current folder words (same as UI list)
-    const list = getCurrentFolderWords()
+    // 当前文件夹的单词（和你页面显示一致）
+    const list = currentWords
       .map((w) => (w.word ?? '').trim())
       .filter(Boolean);
 
@@ -134,34 +138,32 @@ export function WordListScreen({
       const text = list[i];
       const lang = guessLang(text);
 
-      await speakTextAsync(text, lang, { interrupt: true });
+      const apple = isAppleMobile();
 
-      // small gap between items
-      await new Promise((r) => setTimeout(r, 250));
+      // 播一个
+      // iOS/iPadOS：频繁 cancel 会导致后续发音降级（变平/变小声），所以尽量不 cancel
+      await speakTextAsync(text, lang, { cancelBeforeSpeak: !apple });
+
+      // 小间隔：iOS/iPadOS 必须拉开间隔才稳定
+      await new Promise((r) => setTimeout(r, apple ? 850 : 250));
 
       i += 1;
 
       if (i >= list.length) {
-        if (autoLoop) i = 0;
-        else break;
+        if (autoLoop) {
+          i = 0;
+        } else {
+          break;
+        }
       }
     }
 
+    // 正常播完
     if (playTokenRef.current === token) {
       setIsAutoPlaying(false);
     }
   };
 
-  // Stop when switching folders or leaving this screen
-  useEffect(() => {
-    stopAutoPlay();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentFolderId]);
-
-  useEffect(() => {
-    return () => stopAutoPlay();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
   useEffect(() => {
     localStorage.setItem(LS_SORT_MODE, sortMode);
   }, [sortMode]);
@@ -713,44 +715,7 @@ export function WordListScreen({
                 </div>
               ))}
 
-              
-              {currentFolderId && currentWords.length > 0 && (
-                <div className="flex items-center justify-between px-4 py-2 border-b border-gray-100">
-                  <div className="flex items-center gap-2 text-[13px] text-gray-500">
-                    <span>自動再生</span>
-                    <button
-                      type="button"
-                      onClick={() => setAutoLoop((v) => !v)}
-                      className={`px-2 py-1 rounded-full border text-[12px] ${
-                        autoLoop
-                          ? 'bg-[#53BEE8]/10 border-[#53BEE8]/30 text-[#2b8fb5]'
-                          : 'bg-white border-gray-200 text-gray-600'
-                      }`}
-                      title="ループ"
-                    >
-                      <span className="inline-flex items-center gap-1">
-                        <Repeat size={14} />
-                        {autoLoop ? 'ループ' : '単発'}
-                      </span>
-                    </button>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => (isAutoPlaying ? stopAutoPlay() : startAutoPlay())}
-                    className="h-10 px-3 rounded-xl bg-white shadow-sm ring-1 ring-black/5 hover:bg-gray-50 flex items-center gap-2"
-                    title={isAutoPlaying ? '停止' : '再生'}
-                  >
-                    {isAutoPlaying ? (
-                      <Pause size={18} className="text-[#53BEE8]" />
-                    ) : (
-                      <Play size={18} className="text-[#53BEE8]" />
-                    )}
-                    <span className="text-[14px] text-gray-700">{isAutoPlaying ? '停止' : '再生'}</span>
-                  </button>
-                </div>
-              )}
-{currentFolderId &&
+              {currentFolderId &&
                 currentWords.map((word) => (
                   <div
                     key={word.id}

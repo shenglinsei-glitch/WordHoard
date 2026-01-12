@@ -13,8 +13,10 @@ import {
   Settings,
   GripVertical,
   X,
+  Volume2,
 } from 'lucide-react';
 import { Word, Folder } from '../types';
+import { guessLang, speakText } from '../utils/tts';
 
 interface WordListScreenProps {
   words: Word[];
@@ -93,6 +95,13 @@ export function WordListScreen({
 
   // drag state
   const dragFromIdRef = useRef<string | null>(null);
+
+  const speakInList = (w: Word) => {
+    const text = (w.word ?? '').trim();
+    if (!text) return;
+    const lang = guessLang(text);
+    speakText(text, lang);
+  };
 
   useEffect(() => {
     localStorage.setItem(LS_SORT_MODE, sortMode);
@@ -647,24 +656,46 @@ export function WordListScreen({
 
               {currentFolderId &&
                 currentWords.map((word) => (
-                  <button
+                  <div
                     key={word.id}
+                    role="button"
+                    tabIndex={0}
                     onClick={() => {
-                      // Store current folder ID in sessionStorage for back navigation
-                      if (currentFolderId) {
-                        sessionStorage.setItem('selectedFolderId', currentFolderId);
-                      }
+                      if (currentFolderId) sessionStorage.setItem('selectedFolderId', currentFolderId);
                       navigate(`/detail/${word.id}`, { state: { fromFolderId: currentFolderId } });
                     }}
-                    className="w-full px-4 py-3 flex items-center justify-between hover:bg-gray-50 transition-colors border-b border-gray-100 last:border-b-0"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        if (currentFolderId) sessionStorage.setItem('selectedFolderId', currentFolderId);
+                        navigate(`/detail/${word.id}`, { state: { fromFolderId: currentFolderId } });
+                      }
+                    }}
+                    className="w-full px-4 py-3 flex items-center justify-between hover:bg-gray-50 transition-colors border-b border-gray-100 last:border-b-0 cursor-pointer"
                   >
                     <div className="flex items-center gap-3 flex-1 min-w-0">
                       <div className="flex-1 min-w-0 text-left pl-9">
                         <p className="text-[17px] text-gray-900 truncate">{word.word}</p>
                       </div>
-                      <ChevronRight size={18} className="text-gray-300 flex-shrink-0" strokeWidth={2} />
                     </div>
-                  </button>
+
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          speakInList(word);
+                        }}
+                        className="p-2 rounded-lg hover:bg-gray-100 transition-colors"
+                        aria-label="発音を再生"
+                        title="再生"
+                      >
+                        <Volume2 size={18} className="text-[#53BEE8]" />
+                      </button>
+                      <ChevronRight size={18} className="text-gray-300" strokeWidth={2} />
+                    </div>
+                  </div>
                 ))}
 
               {!currentFolderId && childFolders.length === 0 && (

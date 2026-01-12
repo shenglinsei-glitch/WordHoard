@@ -2,6 +2,7 @@ import { useCallback, useMemo } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { ArrowLeft, Edit3, Folder as FolderIcon, Volume2 } from 'lucide-react';
 import { Word, Folder } from '../types';
+import { guessLang, speakText } from '../utils/tts';
 
 interface Props {
   words: Word[];
@@ -58,16 +59,16 @@ export function WordDetailScreen({ words, folders }: Props) {
   if (!word) return null;
 
 
-  const handleSpeak = (text: string, lang: string) => {
-    if (!text) return;
-    if ('speechSynthesis' in window) {
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = lang;
-      window.speechSynthesis.speak(utterance);
-    } else {
-      alert('お使いのブラウザは音声再生に対応していません');
-    }
-  };
+  const speakPrimary = useCallback(() => {
+    const lang = guessLang(word.word, { preferJa: Boolean(word.katakana) });
+    speakText(word.word, lang);
+  }, [word.word, word.katakana]);
+
+  const speakEnglish = useCallback(() => {
+    const t = (word.english ?? '').trim();
+    if (!t) return;
+    speakText(t, 'en-US');
+  }, [word.english]);
 
 
   const folderNames = useMemo(() => {
@@ -103,21 +104,19 @@ export function WordDetailScreen({ words, folders }: Props) {
         {/* Main text card */}
         <div className="bg-white rounded-2xl shadow-sm p-6">
           <div className="text-center">
-            <h1 className="text-4xl font-semibold text-gray-800">{word.word}</h1>
-            {word.katakana && (
-              <div className="mt-2 flex items-center justify-center gap-2 text-gray-400">
-                <span>{word.katakana}</span>
-                <button
-                  type="button"
-                  onClick={() => handleSpeak(word.word, 'ja-JP')}
-                  className="p-1 rounded-md hover:bg-black/5 transition-colors"
-                  aria-label="日本語を再生"
-                  title="再生"
-                >
-                  <Volume2 size={18} className="text-[#53BEE8]" />
-                </button>
-              </div>
-            )}
+            <div className="flex items-center justify-center gap-2">
+              <h1 className="text-4xl font-semibold text-gray-800">{word.word}</h1>
+              <button
+                type="button"
+                onClick={speakPrimary}
+                className="p-1.5 rounded-md hover:bg-black/5 transition-colors"
+                aria-label="発音を再生"
+                title="再生"
+              >
+                <Volume2 size={20} className="text-[#53BEE8]" />
+              </button>
+            </div>
+            {word.katakana && <div className="mt-2 text-gray-400">{word.katakana}</div>}
           </div>
 
           <div className="mt-6 space-y-4">
@@ -128,15 +127,9 @@ export function WordDetailScreen({ words, folders }: Props) {
                 {word.english && (
                   <div className="flex items-center justify-center gap-2">
                     <div className="text-[18px] text-gray-700">{word.english}</div>
-                    
-                  </div>
-                )}
-                {word.phonetic && (
-                  <div className="mt-1 flex items-center justify-center gap-2 text-[14px] text-gray-400">
-                    <span>{word.phonetic}</span>
                     <button
                       type="button"
-                      onClick={() => handleSpeak(word.english ?? word.word, 'en-US')}
+                      onClick={speakEnglish}
                       className="p-1 rounded-md hover:bg-black/5 transition-colors"
                       aria-label="英語を再生"
                       title="再生"
@@ -144,6 +137,9 @@ export function WordDetailScreen({ words, folders }: Props) {
                       <Volume2 size={18} className="text-[#53BEE8]" />
                     </button>
                   </div>
+                )}
+                {word.phonetic && (
+                  <div className="mt-1 text-[14px] text-gray-400">{word.phonetic}</div>
                 )}
               </div>
             )}

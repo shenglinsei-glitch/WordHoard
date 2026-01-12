@@ -1,4 +1,4 @@
-// 最终兼容版：同时优化 PC (Chrome/Edge) 与 iOS (Safari)
+// 最终修正版：解决 iOS 强制变回女声及音量平淡问题
 export type TtsLang = 'ja-JP' | 'en-US' | 'en-GB' | 'zh-CN' | string;
 
 const RE_JA = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/;
@@ -21,14 +21,13 @@ export function guessLang(text: string, opts?: { preferJa?: boolean }): TtsLang 
 }
 
 /**
- * 核心筛选逻辑：智能权重
+ * 核心筛选：加入 Otoya/男声 极高权重
  */
 function pickVoice(lang: string): SpeechSynthesisVoice | undefined {
   const voices = window.speechSynthesis.getVoices?.() ?? [];
   if (!voices.length) return undefined;
 
   const targetLang = lang.toLowerCase().replace('_', '-');
-  // 过滤出语种匹配的声音
   const sameLang = voices.filter((v) => (v.lang ?? '').toLowerCase().replace('_', '-').startsWith(targetLang));
   
   const pool = sameLang.length ? sameLang : voices;
@@ -37,25 +36,24 @@ function pickVoice(lang: string): SpeechSynthesisVoice | undefined {
     const name = (v.name ?? '').toLowerCase();
     let score = 0;
 
-    // 1. 最高优先级：PC 端的神经网络声音 (Google/Microsoft Online)
-    if (name.includes('online') || name.includes('neural') || name.includes('natural')) score += 100;
-    
-    // 2. 厂商权重 (Google 和 Microsoft 的 Web 语音通常音质和音量最好)
-    if (name.includes('google')) score += 50;
-    if (name.includes('microsoft')) score += 40;
+    // 1. 强制匹配男声关键角色 (Otoya)
+    if (name.includes('otoya')) score += 500; 
 
-    // 3. 针对 iOS 的权重 (匹配你截图中的“拡張”或“Enhanced”)
-    if (name.includes('拡張') || name.includes('expanded') || name.includes('enhanced') || name.includes('premium')) score += 60;
+    // 2. 匹配高质量扩展包 (iOS 截图中的“拡張”)
+    if (name.includes('拡張') || name.includes('enhanced') || name.includes('premium')) score += 100;
     
-    // 4. 角色权重
-    if (['nanami', 'otoya', 'kyoko', 'samantha'].some(n => name.includes(n))) score += 20;
+    // 3. PC端神经网络声音
+    if (name.includes('online') || name.includes('neural') || name.includes('natural')) score += 80;
+    
+    // 4. 厂商权重
+    if (name.includes('google')) score += 50;
+    if (name.includes('apple')) score += 40;
+    if (name.includes('microsoft')) score += 30;
 
     return score;
   };
 
-  // 排序并取最高分
-  const sorted = [...pool].sort((a, b) => getPriority(b) - getPriority(a));
-  return sorted[0];
+  return [...pool].sort((a, b) => getPriority(b) - getPriority(a))[0];
 }
 
 const VOICE_CACHE = new Map<string, { name: string; lang: string }>();
@@ -87,9 +85,7 @@ export function speakText(
   }
 ) {
   const t = (text ?? '').trim();
-  if (!t) return;
-
-  if (!('speechSynthesis' in window)) return;
+  if (!t || !('speechSynthesis' in window)) return;
 
   const synth = window.speechSynthesis;
   const appleMobile = isAppleMobile();
@@ -104,30 +100,29 @@ export function speakText(
   }
 
   const utter = new SpeechSynthesisUtterance(t);
+  // 初步设置语种
   utter.lang = lang;
   utter.volume = opts?.volume ?? 1.0; 
   utter.rate = opts?.rate ?? 1.0;     
-  
-  const isJa = String(lang).toLowerCase().startsWith('ja');
-  utter.pitch = opts?.pitch ?? (isJa ? 1.0 : 1.0); 
+  utter.pitch = opts?.pitch ?? 1.0; 
 
   const doSpeak = () => {
-    const delay = shouldInterrupt ? (appleMobile ? 150 : 30) : 0;
+    const delay = shouldInterrupt ? (appleMobile ? 200 : 30) : 0;
     setTimeout(() => {
-      try { synth.speak(utter); } catch (e) { }
+      try {
+        // iOS 兜底：如果还是在说话，强行重置一次
+        if (appleMobile && synth.speaking) synth.cancel();
+        synth.speak(utter);
+      } catch (e) { }
     }, delay);
   };
 
   const assignVoiceAndSpeak = () => {
-    // PC 端优先使用缓存，iOS 初次尝试让系统选（为了稳定）
-    const cached = getCachedVoice(lang);
-    if (appleMobile && !cached) {
-      doSpeak();
-      return;
-    }
-    const v = cached ?? pickVoice(lang);
+    const v = getCachedVoice(lang) ?? pickVoice(lang);
     if (v) {
       utter.voice = v;
+      // 重要：在 iOS 上，utter.lang 必须与 voice.lang 完全一致，否则会被忽略强制变回女声
+      utter.lang = v.lang; 
       cacheVoice(lang, v);
     }
     doSpeak();
@@ -142,11 +137,10 @@ export function speakText(
       assignVoiceAndSpeak();
     };
     synth.addEventListener('voiceschanged', handler);
-    setTimeout(handler, 300);
+    setTimeout(handler, 350);
   }
 }
 
-// Promise 版异步播放（逻辑同上）
 export function speakTextAsync(
   text: string,
   lang: TtsLang,
@@ -169,9 +163,10 @@ export function speakTextAsync(
     if (shouldInterrupt) { try { synth.cancel(); } catch { } }
 
     const utter = new SpeechSynthesisUtterance(t);
-    utter.lang = lang;
     utter.volume = opts?.volume ?? 1.0;
     utter.rate = opts?.rate ?? 1.0;
+    utter.pitch = opts?.pitch ?? 1.0;
+
     utter.onend = () => resolve();
     utter.onerror = () => resolve();
 
@@ -179,9 +174,12 @@ export function speakTextAsync(
       const v = getCachedVoice(lang) ?? pickVoice(lang);
       if (v) {
         utter.voice = v;
+        utter.lang = v.lang;
         cacheVoice(lang, v);
+      } else {
+        utter.lang = lang;
       }
-      const delay = shouldInterrupt ? (appleMobile ? 150 : 30) : 0;
+      const delay = shouldInterrupt ? (appleMobile ? 200 : 30) : 0;
       setTimeout(() => {
         try { synth.speak(utter); } catch { resolve(); }
       }, delay);
@@ -196,7 +194,7 @@ export function speakTextAsync(
         assignVoiceAndSpeak();
       };
       synth.addEventListener('voiceschanged', handler);
-      setTimeout(handler, 300);
+      setTimeout(handler, 350);
     }
   });
 }

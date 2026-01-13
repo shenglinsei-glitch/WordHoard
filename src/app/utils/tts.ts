@@ -1,56 +1,56 @@
-// tts.ts
-import { speakViaCloud, stopCloudTts } from './ttsCloud'; // 导入新方法
+import { speakViaCloud, stopCloud } from './ttsCloud';
 
-export type TtsLang = string;
+export type SpeakOptions = {
+  cancelBeforeSpeak?: boolean;
+};
 
-export function guessLang(text: string): TtsLang {
-  return /[ぁ-んァ-ン一-龠]/.test(text) ? 'ja-JP' : 'en-US';
-}
-
-// 统一停止所有语音
-export function stopTts() {
-  // 1. 停止本地 Web Speech API
-  if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-    window.speechSynthesis.cancel();
-  }
-  // 2. 停止云端 Audio 对象
-  stopCloudTts();
-}
-
-export async function speakText(
+export function guessLang(
   text: string,
-  lang: TtsLang,
-  opts?: { interrupt?: boolean }
-) {
-  const t = (text ?? '').trim();
-  if (!t) return;
+  _opts?: { preferJa?: boolean }
+): 'ja' | 'en' | 'other' {
+  if (/[぀-ヿ㐀-䶿一-鿿]/.test(text)) return 'ja';
+  if (/[a-zA-Z]/.test(text)) return 'en';
+  return 'other';
+}
 
-  // 这里的 interrupt 逻辑：如果为 true，先调用停止
-  if (opts?.interrupt !== false) {
+let utterance: SpeechSynthesisUtterance | null = null;
+
+export function stopTts() {
+  if (utterance) {
+    window.speechSynthesis.cancel();
+    utterance = null;
+  }
+  stopCloud();
+}
+
+// legacy-compatible wrapper
+export function speakText(text: string, _lang?: any, _opts?: SpeakOptions) {
+  void speakTextAsync(text, _lang, _opts);
+}
+
+export async function speakTextAsync(
+  text: string,
+  lang?: any,
+  opts?: SpeakOptions
+) {
+  if (!text) return;
+
+  if (opts?.cancelBeforeSpeak !== false) {
     stopTts();
   }
 
-  const isIOS =
-    /iPhone|iPad|iPod/i.test(navigator.userAgent) ||
-    (navigator.userAgent.includes('Macintosh') && navigator.maxTouchPoints > 1);
+  const detected = typeof lang === 'string' ? lang : guessLang(text);
+  const isApple = /iPad|iPhone|iPod/i.test(navigator.userAgent) ||
+    (navigator.userAgent.includes('Macintosh') && (navigator as any).maxTouchPoints > 1);
 
-  if (isIOS && lang.startsWith('ja')) {
-    await speakViaCloud(t, 'ja-JP-KeitaNeural');
+  // iOS/iPadOS + Japanese → force cloud
+  if ((detected === 'ja' || detected === 'ja-JP') && isApple) {
+    await speakViaCloud(text);
     return;
   }
 
-  if (!('speechSynthesis' in window)) return;
-
-  const synth = window.speechSynthesis;
-  const u = new SpeechSynthesisUtterance(t);
-  u.lang = lang;
-  u.rate = 1;
-  u.pitch = lang.startsWith('ja') ? 1.05 : 1;
-  u.volume = 1;
-
-  synth.speak(u);
-}
-
-export async function speakTextAsync(text: string, lang: TtsLang, opts?: { interrupt?: boolean }) {
-  return speakText(text, lang, opts);
+  // Web Speech fallback (non-iOS or non-JA)
+  utterance = new SpeechSynthesisUtterance(text);
+  utterance.lang = detected === 'en' ? 'en-US' : 'ja-JP';
+  window.speechSynthesis.speak(utterance);
 }

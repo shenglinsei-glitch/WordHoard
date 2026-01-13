@@ -1,93 +1,103 @@
-const WORKER_URL = 'https://wordhoard-tts.shenglin-sei.workers.dev/';
+// ttsCloud.ts
+// 只做两件事：请求 Cloudflare Worker → 播放 mp3（不做任何 speechSynthesis fallback）
 
-let audio: HTMLAudioElement | null = null;
-let currentToken = 0;
+interface ImportMetaEnv {
+  readonly VITE_TTS_PROXY_URL?: string;
+}
 
-export type CloudSpeakOptions = {
-  voice?: string; // e.g. 'ja-JP-KeitaNeural', 'en-US-JennyNeural'
-  signal?: AbortSignal;
-};
+interface ImportMeta {
+  readonly env: ImportMetaEnv;
+}
 
-/** Stop current cloud audio immediately. */
-export function stopCloud() {
-  currentToken += 1;
-  if (audio) {
-    try { audio.pause(); } catch {}
-    try { audio.src = ''; } catch {}
-    audio = null;
+const DEFAULT_WORKER_URL = 'https://wordhoard-tts.shenglin-sei.workers.dev/';
+const WORKER_URL = ((import.meta as unknown as ImportMeta).env.VITE_TTS_PROXY_URL || DEFAULT_WORKER_URL).trim();
+
+const audioCache = new Map<string, Blob>();
+
+let currentAudio: HTMLAudioElement | null = null;
+let currentObjectUrl: string | null = null;
+
+function buildWorkerUrl(text: string, voice: string) {
+  const base = WORKER_URL.endsWith('/') ? WORKER_URL : WORKER_URL + '/';
+  const u = new URL(base);
+  u.searchParams.set('text', text);
+  if (voice) u.searchParams.set('voice', voice);
+  return u.toString();
+}
+
+export function stopCloudTts() {
+  if (currentAudio) {
+    try {
+      currentAudio.pause();
+      currentAudio.currentTime = 0;
+    } catch {
+      // ignore
+    }
+    currentAudio = null;
+  }
+  if (currentObjectUrl) {
+    try {
+      URL.revokeObjectURL(currentObjectUrl);
+    } catch {
+      // ignore
+    }
+    currentObjectUrl = null;
   }
 }
 
-/**
- * Speak via Cloudflare Worker (Azure TTS).
- * - No speechSynthesis fallback here.
- * - Resolves when playback ends (or rejects on error).
- */
-export function speakViaCloudAsync(text: string, opts: CloudSpeakOptions = {}): Promise<void> {
+export async function speakViaCloud(text: string, voice = 'ja-JP-KeitaNeural'): Promise<void> {
   const t = (text ?? '').trim();
-  if (!t) return Promise.resolve();
+  if (!t) return;
 
-  const token = currentToken + 1;
-  currentToken = token;
+  const cacheKey = `${voice}|${t}`;
 
-  const url = new URL(WORKER_URL);
-  url.searchParams.set('text', t);
-  if (opts.voice) url.searchParams.set('voice', opts.voice);
+  // 新开播音前，先停掉正在播的
+  stopCloudTts();
 
-  stopCloud();
-
-  audio = new Audio(url.toString());
-  audio.preload = 'auto';
-  audio.volume = 1;
-
-  // iOS inline playback hint (TS doesn't know playsInline on HTMLAudioElement)
-  (audio as any).playsInline = true;
-  try { audio.setAttribute('playsinline', 'true'); } catch {}
-
-  const a = audio;
-
-  return new Promise<void>((resolve, reject) => {
-    const cleanup = () => {
-      if (a) {
-        a.onended = null;
-        a.onerror = null;
-        a.onpause = null;
-      }
-    };
-
-    if (opts.signal) {
-      if (opts.signal.aborted) {
-        cleanup();
-        stopCloud();
-        reject(new DOMException('Aborted', 'AbortError'));
-        return;
-      }
-      const onAbort = () => {
-        opts.signal?.removeEventListener('abort', onAbort);
-        cleanup();
-        stopCloud();
-        reject(new DOMException('Aborted', 'AbortError'));
-      };
-      opts.signal.addEventListener('abort', onAbort, { once: true });
+  let blob = audioCache.get(cacheKey);
+  if (!blob) {
+    const url = buildWorkerUrl(t, voice);
+    const r = await fetch(url, { method: 'GET' });
+    if (!r.ok) {
+      const msg = await r.text().catch(() => '');
+      throw new Error(`Cloud TTS failed: ${r.status} ${msg}`);
     }
+    blob = await r.blob();
+    audioCache.set(cacheKey, blob);
+  }
 
-    a.onended = () => {
-      if (currentToken !== token) return;
-      cleanup();
+  const objectUrl = URL.createObjectURL(blob);
+  currentObjectUrl = objectUrl;
+
+  const audio = new Audio(objectUrl);
+  currentAudio = audio;
+
+  // iOS: TS 类型里没有 playsInline，用 attribute 设置
+  try {
+    audio.setAttribute('playsinline', 'true');
+    audio.setAttribute('webkit-playsinline', 'true');
+  } catch {
+    // ignore
+  }
+
+  audio.preload = 'auto';
+
+  await new Promise<void>((resolve) => {
+    const cleanup = () => {
+      if (currentAudio === audio) currentAudio = null;
+      if (currentObjectUrl === objectUrl) currentObjectUrl = null;
+      try {
+        URL.revokeObjectURL(objectUrl);
+      } catch {
+        // ignore
+      }
       resolve();
     };
 
-    a.onerror = () => {
-      if (currentToken !== token) return;
-      cleanup();
-      reject(new Error('Cloud audio playback failed'));
-    };
+    audio.onended = cleanup;
+    audio.onerror = cleanup;
 
-    // Play must be called in a user gesture chain on iOS (caller ensures this)
-    a.play().catch((err) => {
-      if (currentToken !== token) return;
-      cleanup();
-      reject(err);
-    });
+    // 必须由用户交互触发，否则 iOS 可能阻止；这里不兜底 speechSynthesis
+    void audio.play().catch(() => cleanup());
   });
 }

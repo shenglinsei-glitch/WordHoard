@@ -69,7 +69,35 @@ const initialFolders: Folder[] = [
 function App() {
   const [words, setWords] = useState<Word[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
+  // === 新增：iOS 音频自动播放限制解锁逻辑 ===
+  useEffect(() => {
+    const unlockAudio = () => {
+      const audio = new Audio();
+      // 使用极短的静音音频 Base64
+      audio.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAVFYAAFRWAAABAAgAZGF0YQAAAAA=';
+      
+      audio.play()
+        .then(() => {
+          console.log('Audio Context Unlocked');
+          // 解锁成功后移除事件监听，避免重复执行
+          window.removeEventListener('click', unlockAudio);
+          window.removeEventListener('touchstart', unlockAudio);
+        })
+        .catch((err) => {
+          console.warn('Audio unlock failed:', err);
+        });
+    };
 
+    // 监听用户第一次点击或触摸
+    window.addEventListener('click', unlockAudio);
+    window.addEventListener('touchstart', unlockAudio);
+
+    return () => {
+      window.removeEventListener('click', unlockAudio);
+      window.removeEventListener('touchstart', unlockAudio);
+    };
+  }, []);
+  
   // ローカルストレージからデータを読み込む
   useEffect(() => {
     const storedWords = localStorage.getItem(WORDS_KEY);

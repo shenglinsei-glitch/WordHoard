@@ -10,13 +10,11 @@ export function stopCloud() {
 
 export function speakViaCloud(text: string) {
   stopCloud();
-
   const url =
     "https://wordhoard-tts.shenglin-sei.workers.dev/?" +
-    "text=" +
-    encodeURIComponent(text);
+    "text=" + encodeURIComponent(text);
 
   audio = new Audio(url);
   audio.preload = "auto";
-  audio.play();
+  void audio.play();
 }

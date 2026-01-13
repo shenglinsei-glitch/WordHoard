@@ -552,6 +552,38 @@ export function WordListScreen({
             )}
           </div>
 
+
+          {/* Center: Auto play (inside folder) */}
+          {currentFolderId && currentFolderId !== UNCATEGORIZED_FOLDER_ID && currentWords.length > 0 && (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => (isAutoPlaying ? stopAutoPlay() : startAutoPlay())}
+                className="h-12 px-4 flex items-center justify-center bg-white/80 backdrop-blur-xl rounded-full shadow-md ring-1 ring-black/5 hover:bg-white transition-colors"
+                aria-label={isAutoPlaying ? '連続再生を停止' : '連続再生を開始'}
+                title={isAutoPlaying ? '停止' : '再生'}
+              >
+                {isAutoPlaying ? (
+                  <Pause size={18} className="text-[#53BEE8]" />
+                ) : (
+                  <Play size={18} className="text-[#53BEE8]" />
+                )}
+                <span className="ml-2 text-[14px] text-gray-700">{isAutoPlaying ? '停止' : '連続再生'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setAutoLoop((v) => !v)}
+                className="h-12 w-12 flex items-center justify-center bg-white/80 backdrop-blur-xl rounded-full shadow-md ring-1 ring-black/5 hover:bg-white transition-colors"
+                aria-label={autoLoop ? 'リピート解除' : 'リピート'}
+                title="リピート"
+              >
+                <Repeat size={18} className={autoLoop ? 'text-[#53BEE8]' : 'text-gray-400'} />
+              </button>
+            </div>
+          )}
+
+
           {/* Right: Add folder */}
           <div className="relative">
             {currentFolderId !== UNCATEGORIZED_FOLDER_ID ? (

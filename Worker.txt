@@ -1,0 +1,91 @@
+export default {
+  async fetch(request, env) {
+    if (request.method === "OPTIONS") {
+      return new Response(null, { headers: corsHeaders() });
+    }
+
+    const url = new URL(request.url);
+
+    let text = "";
+    let voice = "";
+
+    if (request.method === "GET") {
+      text = String(url.searchParams.get("text") ?? url.searchParams.get("t") ?? "").trim();
+      voice = String(url.searchParams.get("voice") ?? env.AZURE_SPEECH_VOICE ?? "ja-JP-KeitaNeural").trim();
+    } else if (request.method === "POST") {
+      let payload;
+      try {
+        payload = await request.json();
+      } catch {
+        return new Response("Bad Request", { status: 400, headers: corsHeaders() });
+      }
+      text = String(payload?.text ?? "").trim();
+      voice = String(payload?.voice ?? env.AZURE_SPEECH_VOICE ?? "ja-JP-KeitaNeural").trim();
+    } else {
+      return new Response("Method Not Allowed", { status: 405, headers: corsHeaders() });
+    }
+
+    if (!text) {
+      return new Response(`Missing text\nURL: ${url.toString()}`, { status: 400, headers: corsHeaders() });
+    }
+
+    const key = env.AZURE_SPEECH_KEY;
+    const region = String(env.AZURE_SPEECH_REGION ?? "japaneast").trim().toLowerCase();
+
+    if (!key || !region) {
+      return new Response("Server not configured", { status: 500, headers: corsHeaders() });
+    }
+
+    const ssml =
+      `<speak version="1.0" xml:lang="ja-JP">` +
+      `<voice name="${escapeXml(voice)}">${escapeXml(text)}</voice>` +
+      `</speak>`;
+
+    const azureUrl = `https://${region}.tts.speech.microsoft.com/cognitiveservices/v1`;
+
+    const r = await fetch(azureUrl, {
+      method: "POST",
+      headers: {
+        "Ocp-Apim-Subscription-Key": key,
+        "Content-Type": "application/ssml+xml",
+        "X-Microsoft-OutputFormat": "audio-16khz-32kbitrate-mono-mp3",
+        "User-Agent": "wordhoard-tts-worker",
+      },
+      body: ssml,
+    });
+
+    if (!r.ok) {
+      const msg = await r.text().catch(() => "");
+      return new Response(`Azure TTS failed: ${r.status} ${msg}`, { status: 502, headers: corsHeaders() });
+    }
+
+    const audioBuffer = await r.arrayBuffer();
+
+    return new Response(audioBuffer, {
+      status: 200,
+      headers: {
+        ...corsHeaders(),
+        "Content-Type": "audio/mpeg",
+        "Content-Length": String(audioBuffer.byteLength),
+        "Cache-Control": "public, max-age=604800",
+      },
+    });
+  },
+};
+
+function corsHeaders() {
+  return {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+  };
+}
+
+function escapeXml(s) {
+  return String(s)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&apos;");
+}

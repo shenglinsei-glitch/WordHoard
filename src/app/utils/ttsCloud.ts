@@ -17,8 +17,8 @@ export async function speakViaCloud(text: string) {
   const url = URL.createObjectURL(blob);
 
   audio = new Audio(url);
-  audio.playsInline = true;
   audio.preload = 'auto';
+  audio.src = url;
   await audio.play();
 }
 

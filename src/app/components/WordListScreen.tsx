@@ -113,13 +113,39 @@ export function WordListScreen({
   const [isAutoPlaying, setIsAutoPlaying] = useState(false);
   const [autoLoop, setAutoLoop] = useState(false);
   const playTokenRef = useRef(0);
+  const [isAutoPaused, setIsAutoPaused] = useState(false);
+  const pausedRef = useRef(false);
+  const pauseReasonRef = useRef<'manual' | 'hidden' | 'offline' | 'error' | null>(null);
+  const autoIndexRef = useRef(0);
+
+  const pauseAutoPlay = (reason: 'manual' | 'hidden' | 'offline' | 'error') => {
+    if (!isAutoPlaying) return;
+    pausedRef.current = true;
+    pauseReasonRef.current = reason;
+    setIsAutoPaused(true);
+    // Stop current audio/speech immediately; resume will continue from next tick
+    stopTts();
+  };
+
+  const resumeAutoPlay = () => {
+    if (!isAutoPlaying) return;
+    pausedRef.current = false;
+    pauseReasonRef.current = null;
+    setIsAutoPaused(false);
+  };
+
 
   const stopAutoPlay = () => {
     playTokenRef.current += 1;
     setIsAutoPlaying(false);
+    pausedRef.current = false;
+    pauseReasonRef.current = null;
+    setIsAutoPaused(false);
+    autoIndexRef.current = 0;
     stopTts();
   };
 
+  
   const startAutoPlay = async () => {
     const token = playTokenRef.current + 1;
     playTokenRef.current = token;
@@ -132,26 +158,58 @@ export function WordListScreen({
     if (!list.length) return;
 
     setIsAutoPlaying(true);
+    pausedRef.current = false;
+    pauseReasonRef.current = null;
+    setIsAutoPaused(false);
 
-    let i = 0;
+    // keep index across auto pause/resume
+    if (autoIndexRef.current >= list.length) autoIndexRef.current = 0;
+
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
     while (playTokenRef.current === token) {
+      // pause gate
+      while (playTokenRef.current === token && pausedRef.current) {
+        await sleep(200);
+      }
+      if (playTokenRef.current !== token) break;
+
+      const i = autoIndexRef.current;
       const text = list[i];
       const lang = guessLang(text);
-
       const apple = isAppleMobile();
 
-      // 播一个
-      // iOS/iPadOS：频繁 cancel 会导致后续发音降级（变平/变小声），所以尽量不 cancel
-      await speakTextAsync(text, lang, { cancelBeforeSpeak: !apple });
+      // Speak one (retry once on transient failures)
+      let ok = false;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          await speakTextAsync(text, lang, { cancelBeforeSpeak: !apple });
+          ok = true;
+          break;
+        } catch (e) {
+          // offline → auto pause and wait for online
+          if (typeof navigator !== 'undefined' && !navigator.onLine) {
+            pauseAutoPlay('offline');
+            break;
+          }
+          await sleep(600);
+        }
+      }
 
-      // 小间隔：iOS/iPadOS 必须拉开间隔才稳定
-      await new Promise((r) => setTimeout(r, apple ? 850 : 250));
+      if (!ok) {
+        // transient failures → auto pause; user can resume (or online/visible will resume)
+        if (!pausedRef.current) pauseAutoPlay('error');
+        continue;
+      }
 
-      i += 1;
+      // Small gap: iOS/iPadOS must keep a longer gap for stability
+      await sleep(apple ? 850 : 250);
 
-      if (i >= list.length) {
+      autoIndexRef.current += 1;
+
+      if (autoIndexRef.current >= list.length) {
         if (autoLoop) {
-          i = 0;
+          autoIndexRef.current = 0;
         } else {
           break;
         }
@@ -161,8 +219,66 @@ export function WordListScreen({
     // 正常播完
     if (playTokenRef.current === token) {
       setIsAutoPlaying(false);
+      pausedRef.current = false;
+      pauseReasonRef.current = null;
+      setIsAutoPaused(false);
+      autoIndexRef.current = 0;
     }
   };
+
+
+
+
+  // Auto pause/resume for continuous play
+  useEffect(() => {
+    const onVis = () => {
+      if (!isAutoPlaying) return;
+      if (document.hidden) {
+        pauseAutoPlay('hidden');
+      } else if (pauseReasonRef.current === 'hidden') {
+        // give iOS a tiny breathing room
+        setTimeout(() => resumeAutoPlay(), 250);
+      }
+    };
+
+    const onBlur = () => {
+      if (!isAutoPlaying) return;
+      pauseAutoPlay('hidden');
+    };
+
+    const onFocus = () => {
+      if (!isAutoPlaying) return;
+      if (pauseReasonRef.current === 'hidden') {
+        setTimeout(() => resumeAutoPlay(), 250);
+      }
+    };
+
+    const onOffline = () => {
+      if (!isAutoPlaying) return;
+      pauseAutoPlay('offline');
+    };
+
+    const onOnline = () => {
+      if (!isAutoPlaying) return;
+      if (pauseReasonRef.current === 'offline' || pauseReasonRef.current === 'error') {
+        setTimeout(() => resumeAutoPlay(), 500);
+      }
+    };
+
+    document.addEventListener('visibilitychange', onVis);
+    window.addEventListener('blur', onBlur);
+    window.addEventListener('focus', onFocus);
+    window.addEventListener('offline', onOffline);
+    window.addEventListener('online', onOnline);
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('blur', onBlur);
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('offline', onOffline);
+      window.removeEventListener('online', onOnline);
+    };
+  }, [isAutoPlaying]);
 
   useEffect(() => {
     localStorage.setItem(LS_SORT_MODE, sortMode);
@@ -552,34 +668,55 @@ export function WordListScreen({
             )}
           </div>
 
-
-          {/* Center: Auto play (inside folder) */}
-          {currentFolderId && currentFolderId !== UNCATEGORIZED_FOLDER_ID && currentWords.length > 0 && (
+          {/* Center: Auto Play (continuous) */}
+          {currentFolderId && (
             <div className="flex items-center gap-2">
               <button
-                type="button"
-                onClick={() => (isAutoPlaying ? stopAutoPlay() : startAutoPlay())}
-                className="h-12 px-4 flex items-center justify-center bg-white/80 backdrop-blur-xl rounded-full shadow-md ring-1 ring-black/5 hover:bg-white transition-colors"
-                aria-label={isAutoPlaying ? '連続再生を停止' : '連続再生を開始'}
-                title={isAutoPlaying ? '停止' : '再生'}
+                onClick={() => {
+                  if (!isAutoPlaying) {
+                    startAutoPlay();
+                    return;
+                  }
+                  if (isAutoPaused) {
+                    resumeAutoPlay();
+                    return;
+                  }
+                  pauseAutoPlay('manual');
+                }}
+                className="h-12 w-12 flex items-center justify-center bg-white/80 backdrop-blur-xl rounded-full shadow-md ring-1 ring-black/5 hover:bg-white transition-colors"
+                aria-label={isAutoPlaying ? (isAutoPaused ? '連続再生を再開' : '連続再生を一時停止') : '連続再生'}
+                title={isAutoPlaying ? (isAutoPaused ? '再開' : '一時停止') : '連続再生'}
               >
                 {isAutoPlaying ? (
-                  <Pause size={18} className="text-[#53BEE8]" />
+                  isAutoPaused ? (
+                    <Play size={22} className="text-[#53BEE8]" />
+                  ) : (
+                    <Pause size={22} className="text-[#53BEE8]" />
+                  )
                 ) : (
-                  <Play size={18} className="text-[#53BEE8]" />
+                  <Play size={22} className="text-[#53BEE8]" />
                 )}
-                <span className="ml-2 text-[14px] text-gray-700">{isAutoPlaying ? '停止' : '連続再生'}</span>
               </button>
 
               <button
-                type="button"
                 onClick={() => setAutoLoop((v) => !v)}
                 className="h-12 w-12 flex items-center justify-center bg-white/80 backdrop-blur-xl rounded-full shadow-md ring-1 ring-black/5 hover:bg-white transition-colors"
-                aria-label={autoLoop ? 'リピート解除' : 'リピート'}
-                title="リピート"
+                aria-label="繰り返し"
+                title={autoLoop ? '繰り返し: ON' : '繰り返し: OFF'}
               >
-                <Repeat size={18} className={autoLoop ? 'text-[#53BEE8]' : 'text-gray-400'} />
+                <Repeat size={22} className={autoLoop ? 'text-[#53BEE8]' : 'text-gray-300'} />
               </button>
+
+              {(isAutoPlaying || isAutoPaused) && (
+                <button
+                  onClick={stopAutoPlay}
+                  className="h-12 w-12 flex items-center justify-center bg-white/80 backdrop-blur-xl rounded-full shadow-md ring-1 ring-black/5 hover:bg-white transition-colors"
+                  aria-label="連続再生を停止"
+                  title="停止"
+                >
+                  <X size={22} className="text-gray-500" />
+                </button>
+              )}
             </div>
           )}
 

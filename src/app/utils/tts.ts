@@ -1,25 +1,13 @@
+// tts.ts
+// Compatibility layer: keep old exports and ensure iOS/iPadOS + Japanese always uses Cloud TTS.
+
 import { speakViaCloud, stopCloudTts } from './ttsCloud';
 
 export type SpeakOptions = {
-  /**
-   * 默认 true：每次播放前会 stopTts()（适合手动点击）。
-   * iOS/iPadOS 连续播放时建议传 false，避免频繁 cancel 导致语音降级。
-   */
   cancelBeforeSpeak?: boolean;
 };
 
-export function guessLang(
-  text: string,
-  opts?: { preferJa?: boolean }
-): 'ja' | 'en' | 'other' {
-  const t = (text ?? '').trim();
-  if (!t) return 'other';
-  // 日语/汉字/假名优先
-  if (/[぀-ヿ㐀-䶿一-鿿]/.test(t)) return 'ja';
-  if (opts?.preferJa && /[ぁ-ゟァ-ヿ]/.test(t)) return 'ja';
-  if (/[a-zA-Z]/.test(t)) return 'en';
-  return 'other';
-}
+export type TtsLang = 'ja-JP' | 'en-US' | string;
 
 const isAppleMobile = () => {
   const ua = navigator.userAgent || '';
@@ -28,190 +16,110 @@ const isAppleMobile = () => {
   return isIOS || isIPadOS;
 };
 
-let currentUtterance: SpeechSynthesisUtterance | null = null;
-let playToken = 0;
-let playingPromise: Promise<void> = Promise.resolve();
+export function guessLang(text: string, opts?: { preferJa?: boolean }): TtsLang {
+  const t = (text ?? '').trim();
+  if (opts?.preferJa) return 'ja-JP';
+  if (/[ぁ-んァ-ン一-龠]/.test(t)) return 'ja-JP';
+  if (/[a-zA-Z]/.test(t)) return 'en-US';
+  // default: keep en-US so Web Speech has a stable fallback
+  return 'en-US';
+}
+
+function pickVoice(lang: string): SpeechSynthesisVoice | null {
+  if (typeof window === 'undefined' || !('speechSynthesis' in window)) return null;
+  const voices = window.speechSynthesis.getVoices?.() ?? [];
+  const lower = lang.toLowerCase();
+
+  const starts = (v: SpeechSynthesisVoice, p: string) =>
+    v.lang?.toLowerCase().startsWith(p);
+
+  const prefer = (arr: SpeechSynthesisVoice[]) => (arr.length ? arr[0] : null);
+
+  if (lower.startsWith('en')) {
+    return (
+      prefer(voices.filter((v) => starts(v, 'en-us') && /google/i.test(v.name))) ||
+      prefer(voices.filter((v) => starts(v, 'en-us') && /microsoft/i.test(v.name))) ||
+      prefer(voices.filter((v) => starts(v, 'en-us'))) ||
+      prefer(voices.filter((v) => starts(v, 'en'))) ||
+      null
+    );
+  }
+
+  if (lower.startsWith('ja')) {
+    return (
+      prefer(voices.filter((v) => starts(v, 'ja-jp') && /google/i.test(v.name))) ||
+      prefer(voices.filter((v) => starts(v, 'ja-jp'))) ||
+      prefer(voices.filter((v) => starts(v, 'ja'))) ||
+      null
+    );
+  }
+
+  return null;
+}
 
 export function stopTts() {
-  playToken += 1;
-
-  try {
-    window.speechSynthesis.cancel();
-  } catch {
-    // ignore
-  }
-  currentUtterance = null;
-
-  stopCloudTts();
-}
-
-// legacy-compatible wrapper
-export function speakText(text: string, lang?: any, opts?: SpeakOptions) {
-  void speakTextAsync(text, lang, opts);
-}
-
-function normalizeLang(input: any, text: string) {
-  const detected = typeof input === 'string' ? input : guessLang(text);
-  if (detected === 'ja') return 'ja-JP';
-  if (detected === 'en') return 'en-US';
-  if (detected === 'ja-JP' || detected === 'en-US') return detected;
-  // 容错：传入过其它 locale 也尽量保留
-  return String(detected || 'ja-JP');
-}
-
-function getVoicesSafe(): SpeechSynthesisVoice[] {
-  try {
-    return window.speechSynthesis.getVoices() || [];
-  } catch {
-    return [];
-  }
-}
-
-function waitForVoices(timeoutMs = 800): Promise<SpeechSynthesisVoice[]> {
-  const now = getVoicesSafe();
-  if (now.length) return Promise.resolve(now);
-
-  return new Promise((resolve) => {
-    let done = false;
-    const finish = () => {
-      if (done) return;
-      done = true;
-      try {
-        window.speechSynthesis.removeEventListener('voiceschanged', onChanged);
-      } catch {
-        // ignore
-      }
-      resolve(getVoicesSafe());
-    };
-
-    const onChanged = () => finish();
-
+  // Stop Web Speech
+  if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
     try {
-      window.speechSynthesis.addEventListener('voiceschanged', onChanged);
+      window.speechSynthesis.cancel();
     } catch {
       // ignore
     }
-
-    setTimeout(finish, timeoutMs);
-  });
+  }
+  // Stop Cloud Audio
+  stopCloudTts();
 }
 
-function pickBestVoice(voices: SpeechSynthesisVoice[], lang: string): SpeechSynthesisVoice | null {
-  if (!voices.length) return null;
-
-  const target = lang.toLowerCase();
-  const prefix = target.split('-')[0];
-
-  const byLangExact = voices.filter((v) => (v.lang || '').toLowerCase() === target);
-  const byLangPrefix = voices.filter((v) => (v.lang || '').toLowerCase().startsWith(prefix));
-
-  const preferredNameHints: Record<string, string[]> = {
-    'en-us': [
-      'google us english',
-      'google english',
-      'microsoft',
-      'zira',
-      'aria',
-      'david',
-      'samantha',
-      'alex',
-    ],
-    'ja-jp': ['google 日本語', 'google japanese', 'microsoft', 'kyoko', 'otoya', 'haruka'],
-  };
-
-  const hints = preferredNameHints[target] || [];
-  const score = (v: SpeechSynthesisVoice) => {
-    const name = (v.name || '').toLowerCase();
-    let s = 0;
-    if ((v.lang || '').toLowerCase() === target) s += 100;
-    if ((v.lang || '').toLowerCase().startsWith(prefix)) s += 50;
-    if (v.default) s += 5;
-    for (let i = 0; i < hints.length; i += 1) {
-      if (name.includes(hints[i])) {
-        s += 20 - i; // 越靠前越优先
-        break;
-      }
-    }
-    // eSpeak / 机械感关键词降权
-    if (name.includes('espeak') || name.includes('microsoft hui') || name.includes('compact')) s -= 30;
-    return s;
-  };
-
-  const pool = (byLangExact.length ? byLangExact : byLangPrefix.length ? byLangPrefix : voices).slice();
-  pool.sort((a, b) => score(b) - score(a));
-  return pool[0] || null;
+export function speakText(text: string, lang?: TtsLang, opts?: SpeakOptions) {
+  // fire-and-forget wrapper
+  void speakTextAsync(text, lang, opts);
 }
 
-async function speakViaWebSpeech(text: string, lang: string, tokenAtStart: number): Promise<void> {
-  const t = (text ?? '').trim();
-  if (!t) return;
-  if (!('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') return;
-
-  const voices = await waitForVoices();
-  if (playToken !== tokenAtStart) return;
-
-  await new Promise<void>((resolve) => {
-    const u = new SpeechSynthesisUtterance(t);
-    currentUtterance = u;
-
-    u.lang = lang;
-
-    const v = pickBestVoice(voices, lang);
-    if (v) u.voice = v;
-
-    // 关键：避免“很小声/机械音”
-    u.volume = 1;
-    u.rate = 1;
-    u.pitch = 1;
-
-    const cleanup = () => {
-      if (currentUtterance === u) currentUtterance = null;
-      resolve();
-    };
-
-    u.onend = cleanup;
-    u.onerror = cleanup;
-
-    try {
-      window.speechSynthesis.speak(u);
-    } catch {
-      cleanup();
-    }
-  });
-}
-
-export async function speakTextAsync(text: string, lang?: any, opts?: SpeakOptions) {
+export async function speakTextAsync(text: string, lang?: TtsLang, opts?: SpeakOptions): Promise<void> {
   const t = (text ?? '').trim();
   if (!t) return;
 
-  const normalizedLang = normalizeLang(lang, t);
-  const tokenAtStart = playToken + 1;
+  const detected = (lang || guessLang(t)) as string;
+  const apple = isAppleMobile();
 
-  const cancel = opts?.cancelBeforeSpeak !== false;
-  if (cancel) {
-    stopTts();
-  } else {
-    // 连续播放：等前一个播完再开始（避免重叠）
-    await playingPromise.catch(() => undefined);
+  // iOS/iPadOS + Japanese → force cloud (no Web Speech fallback)
+  if (apple && detected.toLowerCase().startsWith('ja')) {
+    await speakViaCloud(t, 'ja-JP-KeitaNeural');
+    return;
   }
 
-  // 更新 token（stopTts() 会 +1，这里要以最新为准）
-  playToken += 1;
-  const myToken = playToken;
+  // Web Speech for other cases
+  if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
 
-  const task = (async () => {
-    const apple = isAppleMobile();
+  const synth = window.speechSynthesis;
 
-    // iOS/iPadOS + Japanese → 强制走云端 Keita
-    if (apple && normalizedLang.toLowerCase().startsWith('ja')) {
-      await speakViaCloud(t, 'ja-JP-KeitaNeural').catch(() => undefined);
-      return;
+  // Cancel before speak (default: true)
+  if (opts?.cancelBeforeSpeak !== false) {
+    try {
+      synth.cancel();
+    } catch {
+      // ignore
     }
+  }
 
-    // 其它情况 → Web Speech（English 在桌面一定要选到 en-US voice）
-    await speakViaWebSpeech(t, normalizedLang, myToken);
-  })();
+  // Ensure voices loaded (Chrome needs a tick sometimes)
+  if (synth.getVoices && synth.getVoices().length === 0) {
+    await new Promise<void>((r) => setTimeout(() => r(), 0));
+  }
 
-  playingPromise = task;
-  await task;
+  await new Promise<void>((resolve, reject) => {
+    const u = new SpeechSynthesisUtterance(t);
+    u.lang = detected.toLowerCase().startsWith('ja') ? 'ja-JP' : 'en-US';
+    u.rate = 1;
+    u.pitch = 1;
+    u.volume = 1;
+
+    const v = pickVoice(u.lang);
+    if (v) u.voice = v;
+
+    u.onend = () => resolve();
+    u.onerror = () => reject(new Error('speechSynthesis error'));
+
+    synth.speak(u);
+  });
 }
